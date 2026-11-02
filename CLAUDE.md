@@ -1,34 +1,36 @@
 # CLAUDE.md
 
-Proyecto: correr DOOM en la badge de JSConf MX 2026 (ESP32-S3 sin PSRAM, pantalla NV3007 428x142, 4 botones) con PlatformIO.
+Doom (motor GBADoom) corriendo en la badge de JSConf MX 2026: ESP32-S3 sin PSRAM, pantalla NV3007 de 428x142 y 4 botones, compilado con PlatformIO. Es un firmware **independiente**: reemplaza al firmware original (Meshtastic) de la badge. Para usarlo, ver `README.md`.
 
 ## Forma de trabajar
+- Explicar en español, a fondo y con estilo didáctico: qué se hace, por qué y qué se espera ver. Quien trabaja aquí suele estar aprendiendo cómo se porta Doom a un ESP32.
+- **Avisar antes de cada flasheo** a la badge y decir qué se escribe y en qué dirección.
+- Pasos pequeños, verificados en el hardware real. Si algo no está verificado, decirlo.
+- No inventar datos del hardware: los pines y las particiones están en `README.md`.
+- `README.md` es solo documentación para quien usa el proyecto. Las notas de trabajo van en `NOTES.md`, que es una bitácora **local** (está en `.gitignore`; si no existe, créala).
 
-- **Explicar todo en español, a fondo y con estilo didáctico.** Es la primera vez del usuario portando Doom a un ESP32: antes y después de cada paso explica qué se hace, por qué, qué significa cada comando, flag o concepto (particiones, mmap, DMA, caché de flash, zone memory, etc.) y qué se espera ver.
-- **Avisar antes de cada flasheo** a la badge y decir qué se va a escribir y en qué dirección.
-- Trabajar por pasos pequeños verificables en el hardware real; no avanzar sobre algo que no se ha probado.
-- No inventar datos del hardware: los pines y hallazgos están en `README.md` / `NOTES.md`. Si algo no está verificado, decirlo.
+## Estructura
+- `src/`: arranque (`main.cpp`), pantalla (`display.*`), botones (`buttons.*`), WAD mapeado de flash (`wad.*`) y la capa de plataforma de GBADoom (`port/i_system_esp32.cpp`).
+- `lib/gbadoom/`: motor GBADoom vendorizado (commit `7763f5f9adf18f83a59093bc1ab786fe2c36591f`, GPL-2.0). Lo nuestro dentro del motor está en `source/esp32/` y en las secciones marcadas con `ESP32:` / `#ifdef ESP_PLATFORM`. El commit «Vendorizar GBADoom @ 7763f5f (sin cambios)» es el motor tal cual; `git diff <ese commit> HEAD -- lib/gbadoom` muestra todo lo que se le cambió.
+- `tools/`: `gen_render_tables.py` (tablas del renderer), `check_wad.py` (valida el WAD convertido), `serial_capture.py` (log serie con reinicio).
+- `partitions_doom.csv`: particiones (app de 2 MB en `0x10000`, WAD en `0x210000`).
 
-## Documentación
-
-- `README.md`: **solo documentación del proyecto** (qué es, hardware, firmware original, tecnologías/repos/licencias, cómo compilar/flashear, cómo jugar, estado). Nada de bitácora.
-- `NOTES.md`: notas de sesión, decisiones (con su porqué), mediciones, hallazgos y pendientes. Actualizarlo al cerrar cada paso.
-
-## Alcance
-
-- Firmware **independiente**: no se convive con Meshtastic ni se reutiliza código del firmware original (solo se consulta como referencia de hardware).
-- Motor: GBADoom (GPL-2; el proyecto es GPL-2, ver COPYING). WAD convertido `doom1gba.wad` en partición propia leído con `esp_partition_mmap`. Los WAD nunca se commitean.
-
-## Comandos
-
-- PlatformIO: `pio` está en `%USERPROFILE%\.platformio\penv\Scripts\pio.exe` (no está en PATH).
+## Comandos (iguales en Windows, macOS y Linux)
 - Compilar: `pio run`
-- Flashear: `pio run -t upload --upload-port COM4`
-- Monitor: `pio device monitor -p COM4`
-- Convertir WAD (lo corre el usuario con `!`: el permiso automático bloquea ejecutar GbaWadUtil.exe): `!cd tools/GbaWadUtil && ./GbaWadUtil.exe -in ../../wad/doom1.wad -out ../../wad/doom1gba.wad`
-- Flashear WAD: `%USERPROFILE%\.platformio\penv\Scripts\esptool.exe --chip esp32s3 -p COM4 write-flash 0x210000 wad/doom1gba.wad`
-- Tablas del renderer (si cambian resolución o FOV): `python -I tools/gen_render_tables.py validate lib/gbadoom/source/tables.c` y luego `generate ... 214 142 110 160` (ver NOTES.md, "Pantalla completa").
-- Motor: `lib/gbadoom/` vendorizado de GBADoom @ 7763f5f; todo cambio nuestro va marcado con `ESP32:`. Capa de plataforma en `src/port/` y `lib/gbadoom/source/esp32/`.
-- Capturar log serial (reinicia la badge): `%USERPROFILE%\.platformio\penv\Scripts\python.exe -I tools/serial_capture.py COM4 <segundos>`
-- No usar VS Code / PIO Home mientras la CLI instala paquetes; no aceptar actualizaciones de PlatformIO Core desde VS Code (ver NOTES.md).
-- La badge está en COM4 (USB nativo, VID 303A). Recuperación: BOOT + RESET.
+- Flashear el firmware: `pio run -t upload` (el puerto se detecta solo; con varias placas, `--upload-port <PUERTO>`)
+- Flashear el WAD: `esptool --chip esp32s3 --port <PUERTO> write-flash 0x210000 wad/doom1gba.wad`
+- Validar el WAD convertido: `python tools/check_wad.py wad/doom1gba.wad`
+- Log serie reiniciando la badge: `python tools/serial_capture.py 30` (usa el Python de PlatformIO o uno con `pyserial`)
+- Tablas del renderer, si cambian resolución o FOV: `python tools/gen_render_tables.py validate lib/gbadoom/source/tables.c` y luego `generate lib/gbadoom/source/tables.c lib/gbadoom/source/esp32/render_tables_esp32.c 214 142 110 160` (mover el `.h` generado a `lib/gbadoom/include/`)
+
+## Convenciones
+- Todo cambio al motor se marca con `ESP32:` (y `#ifdef ESP_PLATFORM` si el código original debe seguir intacto), para poder comparar contra upstream.
+- Los WAD y los volcados de flash (`*.wad`, `*.bin`) nunca se commitean.
+- El proyecto es GPL-2.0 (ver `COPYING`) por incluir GBADoom.
+
+## Cosas que ya costaron tiempo
+- **`Serial.setTxTimeoutMs(0)`** justo después de `Serial.begin()`: con el USB nativo, si nadie lee el puerto, `printf` se bloquea y el juego se congela. No imprimir por serie en el bucle de juego sin esto.
+- **`lprintf` del motor solo entiende `%s` y `%d`** (no `%u`, `%x`, `%f`).
+- **`esptool read-flash` con el stub se atora** (`Packet content transfer stopped`) en ciertos bloques de la flash por el USB nativo del S3. Para respaldos usar `--no-stub` (más lento, pero confiable).
+- **Primer build en Windows**: no tener VS Code / PIO Home abiertos mientras PlatformIO instala pioarduino (bloquean archivos de su entorno Python) y no aceptar actualizar PlatformIO Core desde VS Code.
+- **El WAD debe corresponder al motor**: `GBAVER` (15) tiene que coincidir con `DOOM_IWAD_VERSION` de `lib/gbadoom/include/doom_iwad.h`.
