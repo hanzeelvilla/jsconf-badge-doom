@@ -1,0 +1,12 @@
+# Tabla de particiones para DOOM (flash de 8 MB = 0x800000)
+# Name,   Type, SubType,  Offset,   Size,     Flags
+# nvs: almacenamiento clave/valor de ESP-IDF (lo usa el WiFi/PHY y Preferences).
+nvs,      data, nvs,      0x9000,   0x5000,
+# otadata: Arduino siempre escribe boot_app0.bin aquí; le damos su lugar.
+otadata,  data, ota,      0xe000,   0x2000,
+# factory: nuestro firmware (2 MB).
+factory,  app,  factory,  0x10000,  0x200000,
+# wad: datos de Doom, leídos con esp_partition_mmap (subtipo propio 0x40).
+wad,      data, 0x40,     0x210000, 0x5E0000,
+# coredump: si el firmware se cae, ESP-IDF guarda aquí el estado para depurar.
+coredump, data, coredump, 0x7F0000, 0x10000,

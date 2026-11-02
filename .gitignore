@@ -1,0 +1,6 @@
+.pio/
+.vscode/
+.claude/settings.local.json
+*.wad
+*.WAD
+*.bin
