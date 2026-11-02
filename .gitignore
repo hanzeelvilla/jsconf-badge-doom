@@ -6,3 +6,4 @@ tools/GbaWadUtil/
 *.wad
 *.WAD
 *.bin
+NOTES.md
