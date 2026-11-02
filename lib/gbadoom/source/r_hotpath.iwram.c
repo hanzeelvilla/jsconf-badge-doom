@@ -3453,7 +3453,13 @@ int I_GetTime(void)
 {
     int thistimereply;
 
-#ifndef GBA
+#if defined(ESP_PLATFORM)
+    // ESP32: tics de 1/35 s desde el arranque, con el timer de 64 bits de
+    // ESP-IDF. clock() usa un clock_t de 32 bits en microsegundos y se
+    // desbordaría a los ~35 minutos. (Implementado en src/port/.)
+    extern int I_GetTime_e32(void);
+    thistimereply = I_GetTime_e32();
+#elif !defined(GBA)
 
     clock_t now = clock();
 

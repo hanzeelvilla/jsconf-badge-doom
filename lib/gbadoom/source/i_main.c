@@ -66,7 +66,10 @@ static void PrintVer(void)
     lprintf("%s", I_GetVersionString());
 }
 
-int main(int argc, const char * const * argv)
+// ESP32: renombrado de main() a doom_main(). En el ESP32 no hay main(): la
+// tarea FreeRTOS "doom" (src/main.cpp) llama a esta función, e I_LoadIwad
+// (src/port/doom_iwad_esp32.c) ignora la ruta y usa el WAD mapeado de flash.
+int doom_main(int argc, const char * const * argv)
 {
     (void)argc;
     (void)argv;

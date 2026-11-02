@@ -14,14 +14,16 @@ Proyecto: correr DOOM en la badge de JSConf MX 2026 (ESP32-S3 sin PSRAM, pantall
 
 ## Alcance
 - Firmware **independiente**: no se convive con Meshtastic ni se reutiliza código del firmware original (solo se consulta como referencia de hardware).
-- Motor: GBADoom (GPL-2). WAD `doom1.wad` en partición propia leído con `esp_partition_mmap`. El WAD nunca se commitea.
+- Motor: GBADoom (GPL-2; el proyecto es GPL-2, ver COPYING). WAD convertido `doom1gba.wad` en partición propia leído con `esp_partition_mmap`. Los WAD nunca se commitean.
 
 ## Comandos
 - PlatformIO: `pio` está en `%USERPROFILE%\.platformio\penv\Scripts\pio.exe` (no está en PATH).
 - Compilar: `pio run`
 - Flashear: `pio run -t upload --upload-port COM4`
 - Monitor: `pio device monitor -p COM4`
-- Flashear WAD: `%USERPROFILE%\.platformio\penv\Scripts\esptool.exe --chip esp32s3 -p COM4 write-flash 0x210000 wad/doom1.wad`
+- Convertir WAD (lo corre el usuario con `!`: el permiso automático bloquea ejecutar GbaWadUtil.exe): `!cd tools/GbaWadUtil && ./GbaWadUtil.exe -in ../../wad/doom1.wad -out ../../wad/doom1gba.wad`
+- Flashear WAD: `%USERPROFILE%\.platformio\penv\Scripts\esptool.exe --chip esp32s3 -p COM4 write-flash 0x210000 wad/doom1gba.wad`
+- Motor: `lib/gbadoom/` vendorizado de GBADoom @ 7763f5f; todo cambio nuestro va marcado con `ESP32:`. Capa de plataforma en `src/port/` y `lib/gbadoom/source/esp32/`.
 - Capturar log serial (reinicia la badge): `%USERPROFILE%\.platformio\penv\Scripts\python.exe -I tools/serial_capture.py COM4 <segundos>`
 - No usar VS Code / PIO Home mientras la CLI instala paquetes; no aceptar actualizaciones de PlatformIO Core desde VS Code (ver NOTES.md).
 - La badge está en COM4 (USB nativo, VID 303A). Recuperación: BOOT + RESET.

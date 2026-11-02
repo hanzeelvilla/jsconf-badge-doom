@@ -1,0 +1,23 @@
+{
+  "name": "gbadoom",
+  "version": "0.0.0+7763f5f",
+  "description": "GBADoom (prBoom para GBA) vendorizado desde github.com/doomhack/GBADoom @ 7763f5f9adf18f83a59093bc1ab786fe2c36591f. Cambios marcados con 'ESP32:'.",
+  "license": "GPL-2.0-or-later",
+  "build": {
+    "srcDir": "source",
+    "includeDir": "include",
+    "flags": [
+      "-std=gnu2x",
+      "-I include/libtimidity",
+      "-w"
+    ],
+    "srcFilter": [
+      "+<*>",
+      "-<i_system_e32.cpp>",
+      "-<i_system_gba.cpp>",
+      "-<i_audio_win.c>",
+      "-<doom_iwad.c>",
+      "-<*.s>"
+    ]
+  }
+}

@@ -1,6 +1,8 @@
 .pio/
 .vscode/
 .claude/settings.local.json
+# GbaWadUtil.exe + DLLs de Qt (46 MB), copiado del repo de GBADoom.
+tools/GbaWadUtil/
 *.wad
 *.WAD
 *.bin

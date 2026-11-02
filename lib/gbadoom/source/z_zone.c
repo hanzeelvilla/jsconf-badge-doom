@@ -25,6 +25,11 @@
 #include "doomtype.h"
 #include "lprintf.h"
 
+#ifdef ESP_PLATFORM
+// ESP32: heap_caps_get_largest_free_block() para dimensionar la zona.
+#include <esp_heap_caps.h>
+#endif
+
 
 //
 // ZONE MEMORY ALLOCATION
@@ -43,6 +48,14 @@ const unsigned int maxHeapSize = (256 * 1024);
 
 #ifndef GBA
 static int running_count = 0;
+#endif
+
+#ifdef ESP_PLATFORM
+// ESP32: en vez de imprimir cada Alloc/Free (cientos de líneas), se guarda
+// el uso actual y el pico para que las estadísticas los muestren.
+static int peak_count = 0;
+int Z_UsedBytes_esp32(void) { return running_count; }
+int Z_PeakBytes_esp32(void) { return peak_count; }
 #endif
 
 typedef struct memblock_s
@@ -71,6 +84,25 @@ void Z_Init (void)
 {
     memblock_t*	block;
 
+#ifdef ESP_PLATFORM
+    // ESP32: no buscar de 4 en 4 bytes desde 256 KB ni quedarse con toda la
+    // RAM. Se pide el bloque libre más grande menos una reserva para lo que
+    // sigue usando memoria en tiempo de ejecución (FreeRTOS, USB, Arduino).
+    // ESP32_ZONE_RESERVE se puede ajustar desde platformio.ini.
+#ifndef ESP32_ZONE_RESERVE
+#define ESP32_ZONE_RESERVE (24 * 1024)
+#endif
+    size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    unsigned int heapSize = (largest > ESP32_ZONE_RESERVE) ? (largest - ESP32_ZONE_RESERVE) : 0;
+    if (heapSize > maxHeapSize)
+        heapSize = maxHeapSize;
+    heapSize &= ~3u;
+    // lprintf solo entiende %s y %d.
+    lprintf("Z_Init: bloque libre mas grande %d, reserva %d", (int)largest, (int)ESP32_ZONE_RESERVE);
+    mainzone = heapSize ? malloc(heapSize) : NULL;
+    if (!mainzone)
+        I_Error("Z_Init: no se pudo reservar la zona (%d bytes)", (int)heapSize);
+#else
     unsigned int heapSize = maxHeapSize;
 
     //We can now alloc all of the rest fo the memory.
@@ -82,6 +114,7 @@ void Z_Init (void)
     } while(mainzone == NULL);
 
     heapSize += 4;
+#endif
 
     lprintf("Z_Init: Heapsize is %d bytes.", heapSize);
 
@@ -132,7 +165,9 @@ void Z_Free (void* ptr)
 
 #ifndef GBA
     running_count -= block->size;
+#ifndef ESP_PLATFORM
     lprintf("Free: %d", running_count);
+#endif
 #endif
 
     other = block->prev;
@@ -275,7 +310,12 @@ void* Z_Malloc(int size, int tag, void **user)
 
 #ifndef GBA
     running_count += base->size;
+#ifdef ESP_PLATFORM
+    if (running_count > peak_count)
+        peak_count = running_count;
+#else
     lprintf("Alloc: %d (%d)", base->size, running_count);
+#endif
 #endif
 
     return (void *) ((byte *)base + sizeof(memblock_t));

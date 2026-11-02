@@ -48,11 +48,19 @@
 
 #include "lprintf.h"
 
+#ifdef ESP_PLATFORM
+// ESP32: implementado en src/port/i_system_esp32.cpp (escribe por Serial USB
+// sin bloquear si nadie está leyendo el puerto).
+void I_LogWrite_esp32(const char* s, unsigned int len);
+#endif
+
 static void L_Write(const char* s, unsigned int len)
 {
 #ifdef GBA
     //Straight to libgba's console devoptab, no stdio.
     write(1, s, len);
+#elif defined(ESP_PLATFORM)
+    I_LogWrite_esp32(s, len);
 #else
     fwrite(s, 1, len, stdout);
 #endif
