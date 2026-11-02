@@ -2117,6 +2117,9 @@ const angle_t tantoangle[2049] =
     536870912
 };
 
+// ESP32: desde viewangletox hasta zlight, estas tablas son para 120x128 y
+// 90 grados. En la badge se usan las de source/esp32/render_tables_esp32.c.
+#ifndef ESP_PLATFORM
 const int viewangletox[4096] =
 {
     120,
@@ -2651,6 +2654,7 @@ const unsigned char zlight[16][128] =
         0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
     },
 };
+#endif // ESP_PLATFORM (ESP32: fin de las tablas reemplazadas)
 
 //ceil(2^32 / n), for exact a / n by multiply in R_DivSmall
 //(r_hotpath.iwram.c). Entries 0 and 1 are unused.

@@ -222,7 +222,18 @@ static void D_Display (void)
         if (_g->automapmode & am_active)
             AM_Drawer();
 
+#ifdef ESP_PLATFORM
+        // ESP32: sin barra de estado; HUD mínimo encima de la vista completa.
+        // ST_Drawer(false) sigue aplicando los tintes de paleta (rojo al
+        // recibir daño, dorado al recoger items) sin dibujar la barra.
+        {
+            extern void HU_DrawMiniHud_esp32(void);
+            ST_Drawer(false, false);
+            HU_DrawMiniHud_esp32();
+        }
+#else
         ST_Drawer(true, false);
+#endif
 
         HU_Drawer();
     }

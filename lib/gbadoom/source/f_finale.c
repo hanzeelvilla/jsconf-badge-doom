@@ -294,7 +294,8 @@ static void F_TextWrite (void)
 
             // Text past the edge of the screen is cut off, not drawn over
             // the next row. GbaWadUtil rewraps DeHackEd text to fit.
-            if (cx + w > SCREENWIDTH*2 || cy + _g->hu_font[c]->height > SCREENHEIGHT)
+            // ESP32: V2D_WIDTH (el ancho del espacio 2D) en vez de SCREENWIDTH*2.
+            if (cx + w > V2D_WIDTH || cy + _g->hu_font[c]->height > SCREENHEIGHT)
                 continue;
 
             // CPhipps - patch drawing updated
@@ -534,7 +535,8 @@ static void F_CastPrint (const char* text) // CPhipps - static, const char*
 
         w = _g->hu_font[c]->width;
         // CPhipps - patch drawing updated
-        V_DrawPatchNoScale(cx, 144, _g->hu_font[c]);
+        // ESP32: y=144 era para 160 filas; se escala al alto real.
+        V_DrawPatchNoScale(cx, 144 * SCREENHEIGHT / 160, _g->hu_font[c]);
         cx+=w;
     }
 }

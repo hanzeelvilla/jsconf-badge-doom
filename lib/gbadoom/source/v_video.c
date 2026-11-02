@@ -62,20 +62,57 @@ void V_DrawBackground(const char* flatname)
     // killough 4/17/98:
     src = W_CacheLumpNum(lump = _g->firstflat + R_FlatNumForName(flatname));
 
+#ifdef ESP_PLATFORM
+    // ESP32: fondo de 240 px centrado, lados en negro.
+    V_ClearSides();
+    dest += v2d_x0 >> 1;
+#endif
+
     for(unsigned int y = 0; y < SCREENHEIGHT; y++)
     {
-        for(unsigned int x = 0; x < 240; x+=64)
+        for(unsigned int x = 0; x < V2D_WIDTH; x+=64)
         {
             unsigned short* d = &dest[ ScreenYToOffset(y) + (x >> 1)];
             const byte* s = &src[((y&63) * 64) + (x&63)];
 
             unsigned int len = 64;
 
-            if( (240-x) < 64)
-                len = 240-x;
+            if( (V2D_WIDTH-x) < 64)
+                len = V2D_WIDTH-x;
 
             BlockCopy(d, s, len);
         }
+    }
+}
+
+// ESP32: origen y ancho de la capa 2D (ver v_video.h). En la GBA el frame mide
+// lo mismo que el espacio 2D, así que el origen es 0.
+int v2d_x0 = (SCREENWIDTH * 2 - V2D_WIDTH) / 2;
+int v2d_w = V2D_WIDTH;
+
+void V_Set2DCentered(void)
+{
+    v2d_x0 = (SCREENWIDTH * 2 - V2D_WIDTH) / 2;
+    v2d_w = V2D_WIDTH;
+}
+
+void V_Set2DFullscreen(void)
+{
+    v2d_x0 = 0;
+    v2d_w = SCREENWIDTH * 2;
+}
+
+void V_ClearSides(void)
+{
+    const int x0 = (SCREENWIDTH * 2 - V2D_WIDTH) / 2;
+    if(x0 <= 0)
+        return;
+    byte* fb = (byte*)_g->screens[0].data;
+    for(int y = 0; y < SCREENHEIGHT; y++)
+    {
+        byte* row = fb + y * SCREENPITCH * 2;
+        memset(row, 0, x0);
+        memset(row + x0 + V2D_WIDTH, 0, SCREENWIDTH * 2 - x0 - V2D_WIDTH);
     }
 }
 
@@ -114,7 +151,7 @@ void V_DrawPatch(int x, int y, int scrn, const patch_t* patch)
 
         const column_t* column = (const column_t *)((const byte*)patch + patch->columnofs[colindex]);
 
-        if (dc_x >= 240)
+        if (dc_x >= v2d_w) // ESP32: era 240
             break;
 
         // step through the posts in a column
@@ -131,7 +168,8 @@ void V_DrawPatch(int x, int y, int scrn, const patch_t* patch)
 
             int count = (dc_yh - dc_yl);
 
-            byte* dest = byte_topleft + (dc_yl*byte_pitch) + dc_x;
+            // ESP32: + v2d_x0, el origen de la capa 2D.
+            byte* dest = byte_topleft + (dc_yl*byte_pitch) + dc_x + v2d_x0;
 
             const fixed_t fracstep = DYI;
             fixed_t frac = 0;
@@ -192,6 +230,20 @@ void V_DrawNumPatch(int x, int y, int scrn, int lump)
 //
 void V_DrawRawStrip(const byte* pic, int width, int x)
 {
+#ifdef ESP_PLATFORM
+    // ESP32: las imágenes de GbaWadUtil son de 240x160; se centran en x y se
+    // escalan a SCREENHEIGHT filas tomando la fila de origen más cercana. En
+    // el ESP32 se puede escribir byte a byte, así que una x impar no necesita
+    // el truco de juntar medias palabras de la GBA.
+    V_ClearSides();
+    byte* fb = (byte*)_g->screens[0].data + v2d_x0;
+    for(int y = 0; y < SCREENHEIGHT; y++)
+    {
+        const byte* srcrow = pic + (y * RAWPAGE_HEIGHT / SCREENHEIGHT) * width + x;
+        memcpy(fb + y * SCREENPITCH * 2, srcrow, RAWPAGE_WIDTH);
+    }
+    return;
+#endif
     unsigned short* dest = _g->screens[0].data;
     const byte* src = pic + x;
 

@@ -59,7 +59,8 @@
 //jff 2/16/98 change 167 to ST_Y-1
 // CPhipps - changed to ST_TY
 // proff - changed to 200-ST_HEIGHT for stretching
-#define HU_TITLEY ((160-ST_SCALED_HEIGHT) - 1 - _g->hu_font[0]->height)
+// ESP32: era 160 fijo (alto de la pantalla del GBA).
+#define HU_TITLEY ((SCREENHEIGHT-ST_SCALED_HEIGHT) - 1 - _g->hu_font[0]->height)
 
 //jff 2/16/98 add coord text widget coordinates
 // proff - changed to SCREENWIDTH to 320 for stretching

@@ -83,6 +83,17 @@ typedef struct
 // V_FillRect
 void V_FillRect(int x, int y, int width, int height, byte colour);
 
+// ESP32: origen y ancho (en pixeles/bytes) de la capa 2D dentro del frame.
+// Por defecto es el espacio de 240 px de GBADoom centrado en la pantalla de
+// 428 px. El HUD usa V_Set2DFullscreen() para dibujar en todo el ancho.
+extern int v2d_x0;
+extern int v2d_w;
+void V_Set2DCentered(void);
+void V_Set2DFullscreen(void);
+// Pone en negro las columnas fuera de la capa 2D centrada (para pantallas
+// que no son 3D: título, intermisión, finale).
+void V_ClearSides(void);
+
 
 // CPhipps - patch drawing
 // Consolidated into the 3 really useful functions:

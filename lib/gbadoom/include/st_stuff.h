@@ -46,7 +46,14 @@
 #define ST_HEIGHT 32
 #define ST_WIDTH  320
 #define ST_Y      (160 - ST_HEIGHT)
+#ifdef ESP_PLATFORM
+// ESP32: sin barra de estado; la vista 3D usa las 142 filas completas y un HUD
+// mínimo (source/esp32/hud_esp32.c) se dibuja encima. La lógica de la barra
+// (cara, contadores) sigue corriendo, solo no se dibuja.
+#define ST_SCALED_HEIGHT 0
+#else
 #define ST_SCALED_HEIGHT ST_HEIGHT
+#endif
 #define ST_SCALED_WIDTH  SCREENWIDTH
 #define ST_SCALED_Y      (SCREENHEIGHT - ST_SCALED_HEIGHT)
 

@@ -19,13 +19,14 @@ extern "C" {
 #include "wad.h"
 
 // --- Framebuffer ---
-// El motor dibuja 120 "columnas" lógicas x 160 filas. Cada pixel ocupa un
-// unsigned short con el mismo índice de color en sus dos bytes (en la GBA
-// así se escriben 2 pixeles a la vez en VRAM, que no acepta escrituras de 8
-// bits). Visto como bytes es un frame de 240x160 indexado. La GBA tiene dos
-// páginas (dibuja en una mientras muestra la otra); aquí copiamos el frame
-// a la pantalla al terminar, así que basta con uno: 38,400 bytes.
-static unsigned short backbuffer[120 * 160];
+// El motor dibuja 214 "columnas" lógicas x 142 filas (SCREENWIDTH/HEIGHT en
+// doomdef.h). Cada columna 3D ocupa un unsigned short con el mismo índice de
+// color en sus dos bytes (en la GBA así se escriben 2 pixeles a la vez en
+// VRAM). Visto como bytes es un frame de 428x142 indexado: la pantalla
+// completa. La GBA tiene dos páginas; aquí basta con una: 60,776 bytes.
+static const int DOOM_COLS = 214;
+static const int DOOM_ROWS = 142;
+static unsigned short backbuffer[DOOM_COLS * DOOM_ROWS];
 
 // La paleta llega en RGB15 de la GBA (5 bits por canal, rojo en los bits
 // bajos). La pantalla quiere RGB565 (rojo en los bits altos, verde con 6).
@@ -53,8 +54,8 @@ void I_InitScreen_e32() {}
 
 void I_CreateBackBuffer_e32() { memset(backbuffer, 0, sizeof(backbuffer)); }
 
-int I_GetVideoWidth_e32() { return 120; }
-int I_GetVideoHeight_e32() { return 160; }
+int I_GetVideoWidth_e32() { return DOOM_COLS; }
+int I_GetVideoHeight_e32() { return DOOM_ROWS; }
 
 unsigned short *I_GetBackBuffer() { return backbuffer; }
 unsigned short *I_GetFrontBuffer() { return backbuffer; }

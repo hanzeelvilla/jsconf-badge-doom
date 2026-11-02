@@ -18,12 +18,10 @@
 static const int SCREEN_W = 428;
 static const int SCREEN_H = 142;
 
-// Frame de GBADoom y su tamaño en pantalla (misma proporción 3:2).
-static const int SRC_W = 240;
-static const int SRC_H = 160;
-static const int DST_W = 213;
-static const int DST_H = 142;
-static const int DST_X = (SCREEN_W - DST_W) / 2;  // 107: barras negras a los lados
+// Frame de GBADoom: 214 columnas de 2 pixeles x 142 filas = la pantalla
+// completa, así que se copia 1:1 sin escalar.
+static const int SRC_W = SCREEN_W;
+static const int SRC_H = SCREEN_H;
 
 static const int CHUNK_LINES = 8;
 
@@ -34,11 +32,9 @@ static Arduino_GFX *gfx = new Arduino_NV3007(bus, TFT_RST, 1 /* rotation */, fal
                                              nv3007_279_init_operations,
                                              sizeof(nv3007_279_init_operations));
 
-// Tablas de escalado por "vecino más cercano": para cada pixel de destino,
-// qué pixel de origen copiar. Se calculan una vez para no dividir por pixel.
-static uint8_t xmap[DST_W];
-static uint8_t ymap[DST_H];
-static uint16_t lineBuf[DST_W * CHUNK_LINES];
+// Bloque de 8 líneas ya convertidas a RGB565 (alineado a 4 para escribir de
+// a 2 pixeles con una sola escritura de 32 bits).
+static uint16_t lineBuf[SRC_W * CHUNK_LINES] __attribute__((aligned(4)));
 static uint32_t lastBlitUs = 0;
 
 void displayBegin(void) {
@@ -46,20 +42,19 @@ void displayBegin(void) {
   digitalWrite(TFT_BL, HIGH);
   if (!gfx->begin(TFT_SPI_HZ)) Serial.println("ERROR: gfx->begin() fallo");
   gfx->fillScreen(RGB565_BLACK);
-  for (int x = 0; x < DST_W; x++) xmap[x] = (uint8_t)(x * SRC_W / DST_W);
-  for (int y = 0; y < DST_H; y++) ymap[y] = (uint8_t)(y * SRC_H / DST_H);
 }
 
 void displayBlitDoom(const uint8_t *fb, const uint16_t *lut565) {
   uint32_t t0 = micros();
-  for (int y = 0; y < DST_H; y += CHUNK_LINES) {
-    int lines = min(CHUNK_LINES, DST_H - y);
-    uint16_t *out = lineBuf;
-    for (int l = 0; l < lines; l++) {
-      const uint8_t *src = fb + ymap[y + l] * SRC_W;
-      for (int x = 0; x < DST_W; x++) *out++ = lut565[src[xmap[x]]];
-    }
-    gfx->draw16bitRGBBitmap(DST_X, y, lineBuf, DST_W, lines);
+  for (int y = 0; y < SRC_H; y += CHUNK_LINES) {
+    int lines = min(CHUNK_LINES, SRC_H - y);
+    const uint8_t *src = fb + y * SRC_W;
+    uint32_t *out = (uint32_t *)lineBuf;
+    // 2 pixeles por vuelta: el de la izquierda va en la mitad baja (el
+    // ESP32-S3 es little-endian, así que queda primero en memoria).
+    for (int i = 0; i < SRC_W * lines; i += 2)
+      *out++ = lut565[src[i]] | ((uint32_t)lut565[src[i + 1]] << 16);
+    gfx->draw16bitRGBBitmap(0, y, lineBuf, SRC_W, lines);
   }
   lastBlitUs = micros() - t0;
 }

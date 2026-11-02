@@ -86,6 +86,14 @@ extern const angle_t tantoangle[2049];
 
 extern const int viewangletox[4096];
 
+#ifdef ESP_PLATFORM
+// ESP32: tablas de source/esp32/render_tables_esp32.c, para el tamaño de vista
+// de la badge (tools/gen_render_tables.py).
+#include "render_tables_esp32.h"
+extern const angle_t xtoviewangle[ESP32_VIEW_WIDTH + 1];
+extern const fixed_t yslope[ESP32_VIEW_HEIGHT];
+extern const fixed_t distscale[ESP32_VIEW_WIDTH];
+#else
 //Copied to VRAM at startup (vram_spare.h).
 extern const angle_t xtoviewangle[121];
 
@@ -93,6 +101,7 @@ extern const angle_t xtoviewangle[121];
 extern const fixed_t yslope[128];
 
 extern const fixed_t distscale[120];
+#endif
 
 //Colormap numbers for Doom's diminishing light, by light level
 //and wall/sprite scale or flat distance (see tables.c).

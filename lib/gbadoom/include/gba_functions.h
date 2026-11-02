@@ -126,7 +126,13 @@ inline static void LoadSRAM(byte* eeprom, unsigned int size, unsigned int offset
 #endif
 }
 
+#ifdef ESP_PLATFORM
+// ESP32: offset de la fila y en shorts, para cualquier ancho (el original
+// de abajo solo vale para 120 columnas).
+#define ScreenYToOffset(x) ((x) * SCREENPITCH)
+#else
 //Cheap mul by 120. Not sure if faster.
 #define ScreenYToOffset(x) ((x << 7) - (x << 3))
+#endif
 
 #endif // GBA_FUNCTIONS_H

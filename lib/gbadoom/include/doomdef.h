@@ -108,6 +108,18 @@ typedef enum {
 // allows us to avoid the overhead of dynamic allocation
 // when multiple screen sizes are supported
 
+#ifdef ESP_PLATFORM
+// ESP32: pantalla completa de la badge. 214 columnas de 2 pixeles = 428 px,
+// 142 filas. Las tablas del renderer van en source/esp32/render_tables_esp32.c
+// (generadas por tools/gen_render_tables.py para este tamaño).
+#define MAX_SCREENWIDTH  214
+#define MAX_SCREENHEIGHT 142
+#define SCREENWIDTH 214
+#define SCREENHEIGHT 142
+// Ancho, en pixeles, del espacio de la capa 2D (menús, textos, imágenes de
+// 240x160 de GbaWadUtil). En pantalla queda centrado.
+#define V2D_WIDTH 240
+#else
 // proff 08/17/98: Changed for high-res
 #define MAX_SCREENWIDTH  120
 #define MAX_SCREENHEIGHT 160
@@ -115,6 +127,8 @@ typedef enum {
 // SCREENWIDTH and SCREENHEIGHT define the visible size
 #define SCREENWIDTH 120
 #define SCREENHEIGHT 160
+#define V2D_WIDTH 240
+#endif
 #define SCREENPITCH SCREENWIDTH //In shorts.
 // SCREENPITCH is the size of one line in the buffer and
 // can be bigger than the SCREENWIDTH depending on the size

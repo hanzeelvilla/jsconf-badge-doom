@@ -4,7 +4,7 @@ DOOM corriendo en la badge digital de **JSConf México 2026** (diseñada por Ele
 
 Es un firmware independiente: reemplaza por completo al firmware original de la badge (basado en Meshtastic). Se puede volver al original en cualquier momento (ver [Restaurar el firmware original](#restaurar-el-firmware-original)).
 
-> **Estado:** **Doom es jugable.** El episodio 1 shareware corre con GBADoom: título, demo, menú y partida (moverse, disparar, abrir puertas), a 27–35 fps en E1M1. No tiene sonido porque la badge no tiene audio.
+> **Estado:** **Doom es jugable a pantalla completa.** El episodio 1 shareware corre con GBADoom a 428x142, sin barra de estado y con un HUD mínimo (vida, armadura, munición, llaves). El campo de visión horizontal es de 110° y va a 26–35 fps en E1M1. No tiene sonido porque la badge no tiene audio.
 > Las notas de trabajo, decisiones y mediciones están en [NOTES.md](NOTES.md).
 
 ## Hardware
@@ -111,24 +111,24 @@ Los 4 botones cambian de función según dónde estés.
 
 **Menú:**
 
-| Botón     | Acción                                                  |
-| --------- | ------------------------------------------------------- |
-| Up / Down | Moverse entre opciones                                  |
-| Select    | Confirmar                                               |
+| Botón     | Acción                                                 |
+| --------- | ------------------------------------------------------ |
+| Up / Down | Moverse entre opciones                                 |
+| Select    | Confirmar                                              |
 | Back      | Regresar al menú anterior (en el principal, lo cierra) |
 
 Para empezar: **New Game** → episodio → dificultad, confirmando cada uno con **Select**.
 
 **Jugando:**
 
-| Botón              | Acción                  |
-| ------------------ | ----------------------- |
-| Up                 | Avanzar                 |
-| Back               | Girar a la izquierda    |
-| Down               | Girar a la derecha      |
-| Select             | Disparar                |
-| Back + Down juntos | Usar / abrir puertas    |
-| Back + Select      | Abrir el menú           |
+| Botón              | Acción               |
+| ------------------ | -------------------- |
+| Up                 | Avanzar              |
+| Back               | Girar a la izquierda |
+| Down               | Girar a la derecha   |
+| Select             | Disparar             |
+| Back + Down juntos | Usar / abrir puertas |
+| Back + Select      | Abrir el menú        |
 
 Se pueden combinar: por ejemplo, Up + Back para avanzar mientras giras.
 

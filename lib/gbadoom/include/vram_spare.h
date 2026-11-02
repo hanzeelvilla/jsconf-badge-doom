@@ -110,7 +110,11 @@ static_assert(sizeof(vram1_spare_t) <= VRAM_PAGE_SPARE_SIZE, "vram1_spare overfl
 #endif
 static_assert(sizeof(objpal_spare_t) <= OBJPAL_SPARE_SIZE, "objpal_spare overflows the OBJ palette");
 static_assert(sizeof(vram_tail_t) == VRAM_TAIL_SIZE, "vram_tail must exactly fill the page 2 gap and OBJ VRAM");
+#ifndef ESP_PLATFORM
+// ESP32: con 214 columnas oam_spare mide ~1.7 KB; fuera de la GBA es RAM
+// normal (oam_spare_storage), así que el límite de 1 KB de la OAM no aplica.
 static_assert(sizeof(oam_spare_t) <= OAM_SPARE_SIZE, "oam_spare overflows OAM");
+#endif
 
 static_assert(sizeof(distscale) / sizeof(distscale[0]) >= SCREENWIDTH, "distscale must cover every column");
 static_assert(sizeof(xtoviewangle) / sizeof(xtoviewangle[0]) >= SCREENWIDTH + 1, "xtoviewangle must cover every column edge");

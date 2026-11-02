@@ -227,6 +227,34 @@ const int centery = (SCREENHEIGHT-ST_SCALED_HEIGHT)/2;
 static const int centerxfrac = (SCREENWIDTH/2) << FRACBITS;
 static const int centeryfrac = ((SCREENHEIGHT-ST_SCALED_HEIGHT)/2) << FRACBITS;
 
+#ifdef ESP_PLATFORM
+// ESP32: FOV de 110 grados en 214x142. La distancia focal horizontal ya no es
+// centerx (eso solo vale para 90 grados): las constantes salen del generador
+// de tablas (include/render_tables_esp32.h, tools/gen_render_tables.py).
+const fixed_t projection = ESP32_PROJECTION;
+
+#define PROJECTIONY_INT ESP32_PROJECTIONY
+
+static const fixed_t projectiony = PROJECTIONY_INT * FRACUNIT;
+
+// Arma en primera persona: se dibuja en un espacio virtual de 320x200.
+// GBADoom la escala a 120/320 columnas x 160/200 filas (0.75 px por 0.8
+// filas, columnas de 2 px). Aquí se conserva esa proporción ancho/alto con
+// la altura de 142 filas: 0.71 filas por unidad y 0.667 px (0.333 columnas).
+#define ESP32_PSPRITE_YSCALE ((SCREENHEIGHT << FRACBITS) / 200)
+static const fixed_t pspritescale = (fixed_t)(((long long)ESP32_PSPRITE_YSCALE * 15) / 32);
+static const fixed_t pspriteiscale = (fixed_t)(((long long)FRACUNIT * FRACUNIT) / (((long long)ESP32_PSPRITE_YSCALE * 15) / 32));
+
+static const fixed_t pspriteyscale = ESP32_PSPRITE_YSCALE;
+static const fixed_t pspriteyiscale = ((UINT_MAX) / ESP32_PSPRITE_YSCALE);
+
+static const angle_t clipangle = ESP32_CLIPANGLE; //xtoviewangle[0];
+
+static const int skytexturemid = 100*FRACUNIT;
+// Cielo: 1 texel por fila con la proyección vertical de Doom (160), como en
+// el original a 320x200.
+static const fixed_t skyiscale = (FRACUNIT*160)/PROJECTIONY_INT;
+#else
 const fixed_t projection = (SCREENWIDTH/2) << FRACBITS;
 
 //Vertical projection, in whole units (Doom's is 160, centerx at 320 wide).
@@ -246,6 +274,7 @@ static const angle_t clipangle = 537395200; //xtoviewangle[0];
 
 static const int skytexturemid = 100*FRACUNIT;
 static const fixed_t skyiscale = (FRACUNIT*200)/((SCREENHEIGHT-ST_HEIGHT)+16);
+#endif
 
 
 //********************************************
@@ -449,7 +478,12 @@ static CONSTFUNC R_BSP_OPT fixed_t R_PointToDist(fixed_t x, fixed_t y)
 #define LIGHTSCALESHIFT_GBA 10
 #define NUMLIGHTSCALE 160
 
+#ifdef ESP_PLATFORM
+// ESP32: scalelight sale de tools/gen_render_tables.py para esta projectiony.
+static_assert(PROJECTIONY_INT == ESP32_PROJECTIONY, "scalelight is generated for ESP32_PROJECTIONY");
+#else
 static_assert(PROJECTIONY_INT == 128, "scalelight in tables.c is built for projectiony 128");
+#endif
 static_assert(sizeof(scalelight) == LIGHTLEVELS * NUMLIGHTSCALE, "scalelight size");
 static_assert(sizeof(zlight) == LIGHTLEVELS * MAXLIGHTZ, "zlight size");
 
@@ -3139,6 +3173,9 @@ void V_DrawPatchNoScale(int x, int y, const patch_t* patch)
 {
     y -= patch->topoffset;
     x -= patch->leftoffset;
+#ifdef ESP_PLATFORM
+    x += v2d_x0; // ESP32: origen de la capa 2D (centrada o pantalla completa)
+#endif
 
     byte* desttop = (byte*)_g->screens[0].data;
     desttop += (ScreenYToOffset(y) << 1) + x;
@@ -3174,7 +3211,7 @@ void V_DrawPatchNoScale(int x, int y, const patch_t* patch)
                 else
                     *dest16 = ((color & 0xff) | (old & 0xff00));
 
-                dest += 240;
+                dest += SCREENPITCH * 2; // ESP32: era 240 (bytes por fila en la GBA)
             }
 
             column = (const column_t*)((const byte*)column + column->length + 4);

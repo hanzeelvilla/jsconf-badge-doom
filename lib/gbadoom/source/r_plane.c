@@ -52,7 +52,13 @@
 #include "r_plane.h"
 #include "global_data.h"
 
+#ifdef ESP_PLATFORM
+// ESP32: 1 / distancia focal, del generador de tablas (FOV de la badge).
+#include "render_tables_esp32.h"
+const fixed_t iprojection = ESP32_IPROJECTION;
+#else
 const fixed_t iprojection = 1092; //( (1 << FRACUNIT) / (SCREENWIDTH / 2))
+#endif
 
 //
 // R_InitPlanes
