@@ -1,0 +1,1543 @@
+/* Emacs style mode select   -*- C++ -*-
+ *-----------------------------------------------------------------------------
+ *
+ *
+ *  PrBoom: a Doom port merged with LxDoom and LSDLDoom
+ *  based on BOOM, a modified and improved DOOM engine
+ *  Copyright (C) 1999 by
+ *  id Software, Chi Hoang, Lee Killough, Jim Flynn, Rand Phares, Ty Halderman
+ *  Copyright (C) 1999-2004 by
+ *  Jess Haas, Nicolas Kalkhof, Colin Phipps, Florian Schulze
+ *  Copyright 2005, 2006 by
+ *  Florian Schulze, Colin Phipps, Neil Stevens, Andrey Budko
+ *
+ *  This program is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU General Public License
+ *  as published by the Free Software Foundation; either version 2
+ *  of the License, or (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+ *  02111-1307, USA.
+ *
+ * DESCRIPTION:
+ *  Movement, collision handling.
+ *  Shooting and aiming.
+ *
+ *-----------------------------------------------------------------------------*/
+
+#include "r_main.h"
+#include "p_mobj.h"
+#include "p_maputl.h"
+#include "p_map.h"
+#include "p_spec.h"
+#include "s_sound.h"
+#include "sounds.h"
+#include "p_inter.h"
+#include "m_random.h"
+#include "m_bbox.h"
+#include "lprintf.h"
+
+#include "global_data.h"
+
+
+// Update floorz/ceilingz from the last P_CheckPosition.
+static void P_SetThingFloorCeiling(mobj_t* thing)
+{
+    thing->floorz = _g->tmfloorz;
+    thing->ceilingz = _g->tmceilingz;
+}
+
+//
+// TELEPORT MOVE
+//
+
+//
+// PIT_StompThing
+//
+
+
+bool PIT_StompThing (mobj_t* thing)
+{
+    fixed_t blockdist;
+
+    // phares 9/10/98: moved this self-check to start of routine
+
+    // don't clip against self
+
+    if (thing == _g->tmthing)
+        return true;
+
+    if (!(thing->flags & MF_SHOOTABLE)) // Can't shoot it? Can't stomp it!
+        return true;
+
+    blockdist = P_RADIUS(thing) + P_RADIUS(_g->tmthing);
+
+    if (D_abs(thing->x - _g->tmx) >= blockdist || D_abs(thing->y - _g->tmy) >= blockdist)
+        return true; // didn't hit it
+
+    // monsters don't stomp things except on boss level
+    if (!_g->telefrag)  // killough 8/9/98: make consistent across all levels
+        return false;
+
+    P_DamageMobj (thing, _g->tmthing, _g->tmthing, 10000); // Stomp!
+
+    return true;
+}
+
+
+//
+// P_TeleportMove
+//
+
+bool P_TeleportMove (mobj_t* thing,fixed_t x,fixed_t y, bool boss)
+{
+    int     xl;
+    int     xh;
+    int     yl;
+    int     yh;
+    int     bx;
+    int     by;
+
+    sector_t*  newsec;
+
+    /* killough 8/9/98: make telefragging more consistent, preserve compatibility */
+    _g->telefrag = P_MobjIsPlayer(thing) || boss;
+
+    // kill anything occupying the position
+
+    _g->tmthing = thing;
+
+    _g->tmx = x;
+    _g->tmy = y;
+
+    _g->tmbbox[BOXTOP] = y + P_RADIUS(_g->tmthing);
+    _g->tmbbox[BOXBOTTOM] = y - P_RADIUS(_g->tmthing);
+    _g->tmbbox[BOXRIGHT] = x + P_RADIUS(_g->tmthing);
+    _g->tmbbox[BOXLEFT] = x - P_RADIUS(_g->tmthing);
+
+    newsec = R_PointInSector (x,y);
+    _g->ceilingline = NULL;
+
+    // The base floor/ceiling is from the subsector
+    // that contains the point.
+    // Any contacted lines the step closer together
+    // will adjust them.
+
+    _g->tmfloorz = _g->tmdropoffz = newsec->floorheight;
+    _g->tmceilingz = newsec->ceilingheight;
+
+    _g->validcount++;
+    _g->numspechit = 0;
+
+    // stomp on any things contacted
+
+    xl = (_g->tmbbox[BOXLEFT] - _g->bmaporgx - MAXRADIUS)>>MAPBLOCKSHIFT;
+    xh = (_g->tmbbox[BOXRIGHT] - _g->bmaporgx + MAXRADIUS)>>MAPBLOCKSHIFT;
+    yl = (_g->tmbbox[BOXBOTTOM] - _g->bmaporgy - MAXRADIUS)>>MAPBLOCKSHIFT;
+    yh = (_g->tmbbox[BOXTOP] - _g->bmaporgy + MAXRADIUS)>>MAPBLOCKSHIFT;
+
+    for (bx=xl ; bx<=xh ; bx++)
+        for (by=yl ; by<=yh ; by++)
+            if (!P_BlockThingsIterator(bx,by,PIT_StompThing))
+                return false;
+
+    // the move is ok,
+    // so unlink from the old position & link into the new position
+
+    P_UnsetThingPosition (thing);
+
+    P_SetThingFloorCeiling(thing);
+
+    thing->x = x;
+    thing->y = y;
+
+    P_SetThingPositionInSector (thing, newsec);
+
+    //thing->PrevX = x;
+    //thing->PrevY = y;
+    //thing->PrevZ = thing->floorz;
+
+    return true;
+}
+
+
+//
+// MOVEMENT ITERATOR FUNCTIONS
+//
+
+
+//                                                                  // phares
+// PIT_CrossLine                                                    //   |
+// Checks to see if a PE->LS trajectory line crosses a blocking     //   V
+// line. Returns false if it does.
+//
+// tmbbox holds the bounding box of the trajectory. If that box
+// does not touch the bounding box of the line in question,
+// then the trajectory is not blocked. If the PE is on one side
+// of the line and the LS is on the other side, then the
+// trajectory is blocked.
+//
+// Currently this assumes an infinite line, which is not quite
+// correct. A more correct solution would be to check for an
+// intersection of the trajectory and the line, but that takes
+// longer and probably really isn't worth the effort.
+//
+
+static // killough 3/26/98: make static
+bool PIT_CrossLine (const line_t* ld)
+{
+    if (!(ld->flags & ML_TWOSIDED) ||
+            (ld->flags & (ML_BLOCKING|ML_BLOCKMONSTERS)))
+        if (!(_g->tmbbox[BOXLEFT]   > MAPTOFIXED(ld->bbox[BOXRIGHT])  ||
+              _g->tmbbox[BOXRIGHT]  < MAPTOFIXED(ld->bbox[BOXLEFT])   ||
+              _g->tmbbox[BOXTOP]    < MAPTOFIXED(ld->bbox[BOXBOTTOM]) ||
+              _g->tmbbox[BOXBOTTOM] > MAPTOFIXED(ld->bbox[BOXTOP])))
+            if (P_PointOnLineSide(_g->pe_x,_g->pe_y,ld) != P_PointOnLineSide(_g->ls_x,_g->ls_y,ld))
+                return(false);  // line blocks trajectory                   //   ^
+    return(true); // line doesn't block trajectory                    //   |
+}                                                                 // phares
+
+
+/* killough 8/1/98: used to test intersection between thing and line
+ * assuming NO movement occurs -- used to avoid sticky situations.
+ */
+
+static int untouched(const line_t *ld)
+{
+    fixed_t x, y, tmbbox[4];
+    return
+            (tmbbox[BOXRIGHT] = (x=_g->tmthing->x)+P_RADIUS(_g->tmthing)) <= MAPTOFIXED(ld->bbox[BOXLEFT]) ||
+            (tmbbox[BOXLEFT] = x-P_RADIUS(_g->tmthing)) >= MAPTOFIXED(ld->bbox[BOXRIGHT]) ||
+            (tmbbox[BOXTOP] = (y=_g->tmthing->y)+P_RADIUS(_g->tmthing)) <= MAPTOFIXED(ld->bbox[BOXBOTTOM]) ||
+            (tmbbox[BOXBOTTOM] = y-P_RADIUS(_g->tmthing)) >= MAPTOFIXED(ld->bbox[BOXTOP]) ||
+            P_BoxOnLineSide(tmbbox, ld) != -1;
+}
+
+//
+// PIT_CheckLine
+// Adjusts tmfloorz and tmceilingz as lines are contacted
+//
+
+static // killough 3/26/98: make static
+bool PIT_CheckLine (const line_t* ld)
+{
+    const fixed_t* tmbbox = _g->tmbbox;
+    const short* ldbbox = ld->bbox;
+
+    if (tmbbox[BOXLEFT] >= MAPTOFIXED(ldbbox[BOXRIGHT]))
+        return true;
+
+    if (tmbbox[BOXRIGHT] <= MAPTOFIXED(ldbbox[BOXLEFT]))
+        return true;
+
+    if (tmbbox[BOXBOTTOM] >= MAPTOFIXED(ldbbox[BOXTOP]))
+        return true;
+
+    if (tmbbox[BOXTOP] <= MAPTOFIXED(ldbbox[BOXBOTTOM]))
+        return true;
+
+    if (P_BoxOnLineSide(tmbbox, ld) != -1)
+        return true; // didn't hit it
+
+    // A line has been hit
+
+    // The moving thing's destination position will cross the given line.
+    // If this should not be allowed, return false.
+    // If the line is special, keep track of it
+    // to process later if the move is proven ok.
+    // NOTE: specials are NOT sorted by order,
+    // so two special lines that are only 8 pixels apart
+    // could be crossed in either order.
+
+    // killough 7/24/98: allow player to move out of 1s wall, to prevent sticking
+    if (ld->sidenum[1] == NO_INDEX) // one sided line
+    {
+        _g->blockline = ld;
+        return _g->tmunstuck && !untouched(ld) &&
+                FixedMul(_g->tmx-_g->tmthing->x,MAPTOFIXED(ld->dy)) > FixedMul(_g->tmy-_g->tmthing->y,MAPTOFIXED(ld->dx));
+    }
+
+    // killough 8/10/98: allow bouncing objects to pass through as missiles
+    if (!(_g->tmthing->flags & (MF_MISSILE)))
+    {
+        if (ld->flags & ML_BLOCKING)           // explicitly blocking everything
+            return _g->tmunstuck && !untouched(ld);  // killough 8/1/98: allow escape
+
+        if (!P_MobjIsPlayer(_g->tmthing) && ld->flags & ML_BLOCKMONSTERS)
+            return false; // block monsters only
+    }
+
+    // set openrange, opentop, openbottom
+    // these define a 'window' from one sector to another across this line
+
+    P_LineOpening (ld);
+
+    // adjust floor & ceiling heights
+
+    if (_g->opentop < _g->tmceilingz)
+    {
+        _g->tmceilingz = _g->opentop;
+        _g->ceilingline = ld;
+        _g->blockline = ld;
+    }
+
+    if (_g->openbottom > _g->tmfloorz)
+    {
+        _g->tmfloorz = _g->openbottom;
+        _g->floorline = ld;          // killough 8/1/98: remember floor linedef
+        _g->blockline = ld;
+    }
+
+    if (_g->lowfloor < _g->tmdropoffz)
+        _g->tmdropoffz = _g->lowfloor;
+
+    // if contacted a special line, add it to the list
+
+    if (LN_SPECIAL(ld))
+    {
+        // 1/11/98 killough: remove limit on lines hit, by array doubling
+        if (_g->numspechit < 4)
+        {
+            _g->spechit[_g->numspechit++] = ld;
+        }
+    }
+
+    return true;
+}
+
+//
+// PIT_CheckThing
+//
+
+static bool PIT_CheckThing(mobj_t *thing) // killough 3/26/98: make static
+{
+    // killough 11/98: add touchy things
+    if (!(thing->flags & (MF_SOLID|MF_SPECIAL|MF_SHOOTABLE)))
+        return true;
+
+    mobj_t* tmthing = _g->tmthing;
+
+    const fixed_t blockdist = P_RADIUS(thing) + P_RADIUS(tmthing);
+
+    if (D_abs(thing->x - _g->tmx) >= blockdist || D_abs(thing->y - _g->tmy) >= blockdist)
+        return true; // didn't hit it
+
+    // killough 11/98:
+    //
+    // This test has less information content (it's almost always false), so it
+    // should not be moved up to first, as it adds more overhead than it removes.
+
+    // don't clip against self
+
+    if (thing == tmthing)
+        return true;
+
+    // check for skulls slamming into things
+
+    if (tmthing->flags & MF_SKULLFLY)
+    {
+        // A flying skull is smacking something.
+        // Determine damage amount, and the skull comes to a dead stop.
+
+        int damage = ((P_Random()%8)+1)*mobjinfo[tmthing->type].damage;
+
+        P_DamageMobj (thing, tmthing, tmthing, damage);
+
+        tmthing->flags &= ~MF_SKULLFLY;
+        tmthing->momx = tmthing->momy = tmthing->momz = 0;
+
+        P_SetMobjState (tmthing, mobjinfo[tmthing->type].spawnstate);
+
+        return false;   // stop moving
+    }
+
+    // missiles can hit other things
+    // killough 8/10/98: bouncing non-solid things can hit other things too
+
+    if (tmthing->flags & MF_MISSILE)
+    {
+        // see if it went over / under
+
+        if (tmthing->z > thing->z + thing->height)
+            return true;    // overhead
+
+        if (tmthing->z+tmthing->height < thing->z)
+            return true;    // underneath
+
+        if (tmthing->target && (tmthing->target->type == thing->type ||
+                                (tmthing->target->type == MT_KNIGHT && thing->type == MT_BRUISER)||
+                                (tmthing->target->type == MT_BRUISER && thing->type == MT_KNIGHT)))
+        {
+
+            if (thing == tmthing->target)
+                return true;                // Don't hit same species as originator.
+            else
+                if (thing->type != MT_PLAYER) // Explode, but do no damage.
+                    return false;         // Let players missile other players.
+        }
+
+        // killough 8/10/98: if moving thing is not a missile, no damage
+        // is inflicted, and momentum is reduced if object hit is solid.
+
+        if (!(tmthing->flags & MF_MISSILE))
+        {
+            if (!(thing->flags & MF_SOLID))
+            {
+                return true;
+            }
+            else
+            {
+                tmthing->momx = -tmthing->momx;
+                tmthing->momy = -tmthing->momy;
+
+                if (!(tmthing->flags & MF_NOGRAVITY))
+                {
+                    tmthing->momx >>= 2;
+                    tmthing->momy >>= 2;
+                }
+                return false;
+            }
+        }
+
+        if (!(thing->flags & MF_SHOOTABLE))
+            return !(thing->flags & MF_SOLID); // didn't do any damage
+
+        // damage / explode
+
+        int damage = ((P_Random()%8)+1)*mobjinfo[tmthing->type].damage;
+        P_DamageMobj (thing, tmthing, tmthing->target, damage);
+
+        // don't traverse any more
+        return false;
+    }
+
+    // check for special pickup
+
+    if (thing->flags & MF_SPECIAL)
+    {
+        unsigned int solid = thing->flags & MF_SOLID;
+        if (tmthing->flags & MF_PICKUP)
+            P_TouchSpecialThing(thing, tmthing); // can remove thing
+        return !solid;
+    }
+
+    // killough 3/16/98: Allow non-solid moving objects to move through solid
+    // ones, by allowing the moving thing (tmthing) to move if it's non-solid,
+    // despite another solid thing being in the way.
+    // killough 4/11/98: Treat no-clipping things as not blocking
+    // ...but not in demo_compatibility mode
+
+    return !(thing->flags & MF_SOLID) || ((thing->flags & MF_NOCLIP || !(tmthing->flags & MF_SOLID)));
+}
+
+// This routine checks for Lost Souls trying to be spawned      // phares
+// across 1-sided lines, impassible lines, or "monsters can't   //   |
+// cross" lines. Draw an imaginary line between the PE          //   V
+// and the new Lost Soul spawn spot. If that line crosses
+// a 'blocking' line, then disallow the spawn. Only search
+// lines in the blocks of the blockmap where the bounding box
+// of the trajectory line resides. Then check bounding box
+// of the trajectory vs. the bounding box of each blocking
+// line to see if the trajectory and the blocking line cross.
+// Then check the PE and LS to see if they're on different
+// sides of the blocking line. If so, return true, otherwise
+// false.
+
+bool Check_Sides(mobj_t* actor, int x, int y)
+{
+    int bx,by,xl,xh,yl,yh;
+
+    _g->pe_x = actor->x;
+    _g->pe_y = actor->y;
+    _g->ls_x = x;
+    _g->ls_y = y;
+
+    // Here is the bounding box of the trajectory
+
+    _g->tmbbox[BOXLEFT]   = _g->pe_x < x ? _g->pe_x : x;
+    _g->tmbbox[BOXRIGHT]  = _g->pe_x > x ? _g->pe_x : x;
+    _g->tmbbox[BOXTOP]    = _g->pe_y > y ? _g->pe_y : y;
+    _g->tmbbox[BOXBOTTOM] = _g->pe_y < y ? _g->pe_y : y;
+
+    // Determine which blocks to look in for blocking lines
+
+    xl = (_g->tmbbox[BOXLEFT]   - _g->bmaporgx)>>MAPBLOCKSHIFT;
+    xh = (_g->tmbbox[BOXRIGHT]  - _g->bmaporgx)>>MAPBLOCKSHIFT;
+    yl = (_g->tmbbox[BOXBOTTOM] - _g->bmaporgy)>>MAPBLOCKSHIFT;
+    yh = (_g->tmbbox[BOXTOP]    - _g->bmaporgy)>>MAPBLOCKSHIFT;
+
+    // xl->xh, yl->yh determine the mapblock set to search
+
+    _g->validcount++; // prevents checking same line twice
+    for (bx = xl ; bx <= xh ; bx++)
+        for (by = yl ; by <= yh ; by++)
+            if (!P_BlockLinesIterator(bx,by,PIT_CrossLine))
+                return true;                                                //   ^
+    return(false);                                                    //   |
+}                                                                 // phares
+
+//
+// MOVEMENT CLIPPING
+//
+
+//
+// P_CheckPosition
+// This is purely informative, nothing is modified
+// (except things picked up).
+//
+// in:
+//  a mobj_t (can be valid or invalid)
+//  a position to be checked
+//   (doesn't need to be related to the mobj_t->x,y)
+//
+// during:
+//  special things are touched if MF_PICKUP
+//  early out on solid lines?
+//
+// out:
+//  newsubsec
+//  floorz
+//  ceilingz
+//  tmdropoffz
+//   the lowest point contacted
+//   (monsters won't move to a dropoff)
+//  speciallines[]
+//  numspeciallines
+//
+
+bool P_CheckPosition (mobj_t* thing,fixed_t x,fixed_t y)
+{
+    int     xl;
+    int     xh;
+    int     yl;
+    int     yh;
+    int     bx;
+    int     by;
+    sector_t*  newsec;
+
+    _g->tmthing = thing;
+
+    _g->tmx = x;
+    _g->tmy = y;
+
+    _g->tmbbox[BOXTOP] = y + P_RADIUS(_g->tmthing);
+    _g->tmbbox[BOXBOTTOM] = y - P_RADIUS(_g->tmthing);
+    _g->tmbbox[BOXRIGHT] = x + P_RADIUS(_g->tmthing);
+    _g->tmbbox[BOXLEFT] = x - P_RADIUS(_g->tmthing);
+
+    _g->tmsector = newsec = R_PointInSector (x,y);
+    _g->floorline = _g->blockline = _g->ceilingline = NULL; // killough 8/1/98
+
+    // Whether object can get out of a sticky situation:
+    _g->tmunstuck = P_MobjIsPlayer(thing) &&          /* only players */
+            P_MobjIsPlayer(thing)->mo == thing; /* not under old demos */
+
+    // The base floor / ceiling is from the subsector
+    // that contains the point.
+    // Any contacted lines the step closer together
+    // will adjust them.
+
+    _g->tmfloorz = _g->tmdropoffz = newsec->floorheight;
+    _g->tmceilingz = newsec->ceilingheight;
+    _g->validcount++;
+    _g->numspechit = 0;
+
+    if ( _g->tmthing->flags & MF_NOCLIP )
+        return true;
+
+
+    // Check lines first.
+    //A player/monster is more likly to be blocked by a
+    //line than a thing. This means we can reduce the number
+    //of thing tests.
+
+    xl = (_g->tmbbox[BOXLEFT] - _g->bmaporgx)>>MAPBLOCKSHIFT;
+    xh = (_g->tmbbox[BOXRIGHT] - _g->bmaporgx)>>MAPBLOCKSHIFT;
+    yl = (_g->tmbbox[BOXBOTTOM] - _g->bmaporgy)>>MAPBLOCKSHIFT;
+    yh = (_g->tmbbox[BOXTOP] - _g->bmaporgy)>>MAPBLOCKSHIFT;
+
+    for (bx=xl ; bx<=xh ; bx++)
+        for (by=yl ; by<=yh ; by++)
+            if (!P_BlockLinesIterator (bx,by,PIT_CheckLine))
+                return false; // doesn't fit
+
+
+    // The bounding box is extended by MAXRADIUS
+    // because mobj_ts are grouped into mapblocks
+    // based on their origin point, and can overlap
+    // into adjacent blocks by up to MAXRADIUS units.
+
+    xl = (_g->tmbbox[BOXLEFT] - _g->bmaporgx - MAXRADIUS)>>MAPBLOCKSHIFT;
+    xh = (_g->tmbbox[BOXRIGHT] - _g->bmaporgx + MAXRADIUS)>>MAPBLOCKSHIFT;
+    yl = (_g->tmbbox[BOXBOTTOM] - _g->bmaporgy - MAXRADIUS)>>MAPBLOCKSHIFT;
+    yh = (_g->tmbbox[BOXTOP] - _g->bmaporgy + MAXRADIUS)>>MAPBLOCKSHIFT;
+
+
+    for (bx=xl ; bx<=xh ; bx++)
+        for (by=yl ; by<=yh ; by++)
+            if (!P_BlockThingsIterator(bx,by,PIT_CheckThing))
+                return false;
+
+    return true;
+}
+
+
+//
+// P_TryMove
+// Attempt to move to a new position,
+// crossing special lines unless MF_TELEPORT is set.
+//
+bool P_TryMove(mobj_t* thing,fixed_t x,fixed_t y, bool dropoff)
+{
+    fixed_t oldx;
+    fixed_t oldy;
+
+    _g->felldown = _g->floatok = false;               // killough 11/98
+
+    if (!P_CheckPosition (thing, x, y))
+        return false;   // solid wall or thing
+
+    if ( !(thing->flags & MF_NOCLIP) )
+    {
+        // killough 7/26/98: reformatted slightly
+        // killough 8/1/98: Possibly allow escape if otherwise stuck
+
+        if (_g->tmceilingz - _g->tmfloorz < thing->height ||     // doesn't fit
+                // mobj must lower to fit
+                (_g->floatok = true, !(thing->flags & MF_TELEPORT) &&
+                 _g->tmceilingz - thing->z < thing->height) ||
+                // too big a step up
+                (!(thing->flags & MF_TELEPORT) &&
+                 _g->tmfloorz - thing->z > 24*FRACUNIT))
+            return _g->tmunstuck
+                    && !(_g->ceilingline && untouched(_g->ceilingline))
+                    && !(  _g->floorline && untouched(  _g->floorline));
+
+        /* killough 3/15/98: Allow certain objects to drop off
+       * killough 7/24/98, 8/1/98:
+       * Prevent monsters from getting stuck hanging off ledges
+       * killough 10/98: Allow dropoffs in controlled circumstances
+       * killough 11/98: Improve symmetry of clipping on stairs
+       */
+
+        if (!(thing->flags & (MF_DROPOFF|MF_FLOAT)))
+        {
+            if (!dropoff)
+            {
+                if (_g->tmfloorz - _g->tmdropoffz > 24*FRACUNIT)
+                    return false;
+            }
+            else
+            { /* dropoff allowed -- check for whether it fell more than 24 */
+                _g->felldown = !(thing->flags & MF_NOGRAVITY) && thing->z - _g->tmfloorz > 24*FRACUNIT;
+            }
+        }
+    }
+
+    // the move is ok,
+    // so unlink from the old position and link into the new position
+
+    P_UnsetThingPosition (thing);
+
+    oldx = thing->x;
+    oldy = thing->y;
+    P_SetThingFloorCeiling(thing);
+    thing->x = x;
+    thing->y = y;
+
+    P_SetThingPositionInSector (thing, _g->tmsector);
+
+    // if any special lines were hit, do the effect
+
+    if (! (thing->flags&(MF_TELEPORT|MF_NOCLIP)) )
+        while (_g->numspechit--)
+            if (LN_SPECIAL(_g->spechit[_g->numspechit]))  // see if the line was crossed
+            {
+                int oldside;
+                if ((oldside = P_PointOnLineSide(oldx, oldy, _g->spechit[_g->numspechit])) !=
+                        P_PointOnLineSide(thing->x, thing->y, _g->spechit[_g->numspechit]))
+                    P_CrossSpecialLine(_g->spechit[_g->numspechit], oldside, thing);
+            }
+
+    return true;
+}
+
+//
+// P_ThingHeightClip
+// Takes a valid thing and adjusts the thing->floorz,
+// thing->ceilingz, and possibly thing->z.
+// This is called for all nearby monsters
+// whenever a sector changes height.
+// If the thing doesn't fit,
+// the z will be set to the lowest value
+// and false will be returned.
+//
+
+bool P_ThingHeightClip (mobj_t* thing)
+{
+    bool   onfloor;
+
+    onfloor = (thing->z == thing->floorz);
+
+    P_CheckPosition (thing, thing->x, thing->y);
+
+    /* what about stranding a monster partially off an edge?
+   * killough 11/98: Answer: see below (upset balance if hanging off ledge)
+   */
+
+    P_SetThingFloorCeiling(thing);
+
+    if (onfloor)
+    {
+
+        // walking monsters rise and fall with the floor
+
+        thing->z = thing->floorz;
+    }
+    else
+    {
+
+        // don't adjust a floating monster unless forced to
+
+        if (thing->z+thing->height > thing->ceilingz)
+            thing->z = thing->ceilingz - thing->height;
+    }
+
+    return thing->ceilingz - thing->floorz >= thing->height;
+}
+
+
+//
+// SLIDE MOVE
+// Allows the player to slide along any angled walls.
+//
+
+
+
+//
+// P_HitSlideLine
+// Adjusts the xmove / ymove
+// so that the next move will slide along the wall.
+// If the floor is icy, then you can bounce off a wall.             // phares
+//
+
+void P_HitSlideLine (const line_t* ld)
+{
+    int     side;
+    angle_t lineangle;
+    angle_t moveangle;
+    angle_t deltaangle;
+    fixed_t movelen;
+    fixed_t newlen;
+    //   |
+    // Under icy conditions, if the angle of approach to the wall     //   V
+    // is more than 45 degrees, then you'll bounce and lose half
+    // your momentum. If less than 45 degrees, you'll slide along
+    // the wall. 45 is arbitrary and is believable.
+
+    // Check for the special cases of horz or vert walls.
+
+    /* killough 10/98: only bounce if hit hard (prevents wobbling)
+   * cph - DEMOSYNC - should only affect players in Boom demos? */
+
+    if (LN_SLOPETYPE(ld) == ST_HORIZONTAL)
+    {
+        _g->tmymove = 0; // no more movement in the Y direction
+        return;
+    }
+
+    if (LN_SLOPETYPE(ld) == ST_VERTICAL)
+    {                                                          // phares
+        _g->tmxmove = 0; // no more movement in the X direction
+        return;
+    }
+
+    // The wall is angled. Bounce if the angle of approach is         // phares
+    // less than 45 degrees.                                          // phares
+
+    side = P_PointOnLineSide (_g->slidemo->x, _g->slidemo->y, ld);
+
+    lineangle = R_PointToAngle2 (0,0, MAPTOFIXED(ld->dx), MAPTOFIXED(ld->dy));
+    if (side == 1)
+        lineangle += ANG180;
+
+    moveangle = R_PointToAngle2 (0,0, _g->tmxmove, _g->tmymove);
+
+    // killough 3/2/98:
+    // The moveangle+=10 breaks v1.9 demo compatibility in
+    // some demos, so it needs demo_compatibility switch.
+
+    moveangle += 10; // prevents sudden path reversal due to        // phares
+    // rounding error                              //   |
+    deltaangle = moveangle-lineangle;                                 //   V
+    movelen = P_AproxDistance (_g->tmxmove, _g->tmymove);
+    //   |
+    // phares
+    if (deltaangle > ANG180)
+        deltaangle += ANG180;
+
+    //  I_Error ("SlideLine: ang>ANG180");
+
+    lineangle >>= ANGLETOFINESHIFT;
+    deltaangle >>= ANGLETOFINESHIFT;
+    newlen = FixedMul (movelen, finecosine[deltaangle]);
+    _g->tmxmove = FixedMul (newlen, finecosine[lineangle]);
+    _g->tmymove = FixedMul (newlen, finesine[lineangle]);
+    // phares
+}
+
+
+//
+// PTR_SlideTraverse
+//
+
+bool PTR_SlideTraverse (intercept_t* in)
+{
+    const line_t* li;
+
+    if (!in->isaline)
+        I_Error ("PTR_SlideTraverse: not a line?");
+
+    li = in->d.line;
+
+    if ( ! (li->flags & ML_TWOSIDED) )
+    {
+        if (P_PointOnLineSide (_g->slidemo->x, _g->slidemo->y, li))
+            return true; // don't hit the back side
+        goto isblocking;
+    }
+
+    // set openrange, opentop, openbottom.
+    // These define a 'window' from one sector to another across a line
+
+    P_LineOpening (li);
+
+    if (_g->openrange < _g->slidemo->height)
+        goto isblocking;  // doesn't fit
+
+    if (_g->opentop - _g->slidemo->z < _g->slidemo->height)
+        goto isblocking;  // mobj is too high
+
+    if (_g->openbottom - _g->slidemo->z > 24*FRACUNIT )
+        goto isblocking;  // too big a step up
+
+    // this line doesn't block movement
+
+    return true;
+
+    // the line does block movement,
+    // see if it is closer than best so far
+
+isblocking:
+
+    if (in->frac < _g->bestslidefrac)
+    {
+        _g->bestslidefrac = in->frac;
+        _g->bestslideline = li;
+    }
+
+    return false; // stop
+}
+
+
+//
+// P_SlideMove
+// The momx / momy move is bad, so try to slide
+// along a wall.
+// Find the first line hit, move flush to it,
+// and slide along it
+//
+// This is a kludgy mess.
+//
+// killough 11/98: reformatted
+
+void P_SlideMove(mobj_t *mo)
+{
+    int hitcount = 3;
+
+    _g->slidemo = mo; // the object that's sliding
+
+    do
+    {
+        fixed_t leadx, leady, trailx, traily;
+
+        if (!--hitcount)
+            goto stairstep;   // don't loop forever
+
+        // trace along the three leading corners
+
+        if (mo->momx > 0)
+            leadx = mo->x + P_RADIUS(mo), trailx = mo->x - P_RADIUS(mo);
+        else
+            leadx = mo->x - P_RADIUS(mo), trailx = mo->x + P_RADIUS(mo);
+
+        if (mo->momy > 0)
+            leady = mo->y + P_RADIUS(mo), traily = mo->y - P_RADIUS(mo);
+        else
+            leady = mo->y - P_RADIUS(mo), traily = mo->y + P_RADIUS(mo);
+
+        _g->bestslidefrac = FRACUNIT+1;
+
+        P_PathTraverse(leadx, leady, leadx+mo->momx, leady+mo->momy,
+                       PT_ADDLINES, PTR_SlideTraverse);
+        P_PathTraverse(trailx, leady, trailx+mo->momx, leady+mo->momy,
+                       PT_ADDLINES, PTR_SlideTraverse);
+        P_PathTraverse(leadx, traily, leadx+mo->momx, traily+mo->momy,
+                       PT_ADDLINES, PTR_SlideTraverse);
+
+        // move up to the wall
+
+        if (_g->bestslidefrac == FRACUNIT+1)
+        {
+            // the move must have hit the middle, so stairstep
+
+stairstep:
+
+            /* killough 3/15/98: Allow objects to drop off ledges
+     *
+     * phares 5/4/98: kill momentum if you can't move at all
+     * This eliminates player bobbing if pressed against a wall
+     * while on ice.
+     *
+     * killough 10/98: keep buggy code around for old Boom demos
+     *
+     * cph 2000/09//23: buggy code was only in Boom v2.01
+     */
+
+            if (!P_TryMove(mo, mo->x, mo->y + mo->momy, true))
+                P_TryMove(mo, mo->x + mo->momx, mo->y, true);
+
+
+            break;
+        }
+
+        // fudge a bit to make sure it doesn't hit
+
+        if ((_g->bestslidefrac -= 0x800) > 0)
+        {
+            fixed_t newx = FixedMul(mo->momx, _g->bestslidefrac);
+            fixed_t newy = FixedMul(mo->momy, _g->bestslidefrac);
+
+            // killough 3/15/98: Allow objects to drop off ledges
+
+            if (!P_TryMove(mo, mo->x+newx, mo->y+newy, true))
+                goto stairstep;
+        }
+
+        // Now continue along the wall.
+        // First calculate remainder.
+
+        _g->bestslidefrac = FRACUNIT-(_g->bestslidefrac+0x800);
+
+        if (_g->bestslidefrac > FRACUNIT)
+            _g->bestslidefrac = FRACUNIT;
+
+        if (_g->bestslidefrac <= 0)
+            break;
+
+        _g->tmxmove = FixedMul(mo->momx, _g->bestslidefrac);
+        _g->tmymove = FixedMul(mo->momy, _g->bestslidefrac);
+
+        P_HitSlideLine(_g->bestslideline); // clip the moves
+
+        mo->momx = _g->tmxmove;
+        mo->momy = _g->tmymove;
+
+        /* killough 10/98: affect the bobbing the same way (but not voodoo dolls)
+       * cph - DEMOSYNC? */
+        if (P_MobjIsPlayer(mo) && P_MobjIsPlayer(mo)->mo == mo)
+        {
+            if (D_abs(P_MobjIsPlayer(mo)->momx) > D_abs(_g->tmxmove))
+                P_MobjIsPlayer(mo)->momx = _g->tmxmove;
+            if (D_abs(P_MobjIsPlayer(mo)->momy) > D_abs(_g->tmymove))
+                P_MobjIsPlayer(mo)->momy = _g->tmymove;
+        }
+    }  // killough 3/15/98: Allow objects to drop off ledges:
+    while (!P_TryMove(mo, mo->x+_g->tmxmove, mo->y+_g->tmymove, true));
+}
+
+//
+// P_LineAttack
+//
+
+
+
+//
+// PTR_AimTraverse
+// Sets linetaget and aimslope when a target is aimed at.
+//
+bool PTR_AimTraverse (intercept_t* in)
+{
+    const line_t* li;
+    mobj_t* th;
+    fixed_t slope;
+    fixed_t thingtopslope;
+    fixed_t thingbottomslope;
+    fixed_t dist;
+
+    if (in->isaline)
+    {
+        li = in->d.line;
+
+        if ( !(li->flags & ML_TWOSIDED) )
+            return false;   // stop
+
+        // Crosses a two sided line.
+        // A two sided line will restrict
+        // the possible target ranges.
+
+        P_LineOpening (li);
+
+        if (_g->openbottom >= _g->opentop)
+            return false;   // stop
+
+        dist = FixedMul(_g->attackrange, in->frac);
+
+        if (LN_FRONTSECTOR(li)->floorheight != LN_BACKSECTOR(li)->floorheight)
+        {
+            slope = FixedDiv (_g->openbottom - _g->shootz , dist);
+
+            if (slope > _g->bottomslope)
+                _g->bottomslope = slope;
+        }
+
+        if (LN_FRONTSECTOR(li)->ceilingheight != LN_BACKSECTOR(li)->ceilingheight)
+        {
+            slope = FixedDiv (_g->opentop - _g->shootz , dist);
+            if (slope < _g->topslope)
+                _g->topslope = slope;
+        }
+
+        if (_g->topslope <= _g->bottomslope)
+            return false;   // stop
+
+        return true;    // shot continues
+    }
+
+    // shoot a thing
+
+    th = in->d.thing;
+    if (th == _g->shootthing)
+        return true;    // can't shoot self
+
+    if (!(th->flags&MF_SHOOTABLE))
+        return true;    // corpse or something
+
+    // check angles to see if the thing can be aimed at
+
+    dist = FixedMul (_g->attackrange, in->frac);
+    thingtopslope = FixedDiv (th->z+th->height - _g->shootz , dist);
+
+    if (thingtopslope < _g->bottomslope)
+        return true;    // shot over the thing
+
+    thingbottomslope = FixedDiv (th->z - _g->shootz, dist);
+
+    if (thingbottomslope > _g->topslope)
+        return true;    // shot under the thing
+
+    // this thing can be hit!
+
+    if (thingtopslope > _g->topslope)
+        thingtopslope = _g->topslope;
+
+    if (thingbottomslope < _g->bottomslope)
+        thingbottomslope = _g->bottomslope;
+
+    _g->aimslope = (thingtopslope+thingbottomslope)/2;
+    _g->linetarget = th;
+
+    return false;   // don't go any farther
+}
+
+
+//
+// PTR_ShootTraverse
+//
+bool PTR_ShootTraverse (intercept_t* in)
+{
+    fixed_t x;
+    fixed_t y;
+    fixed_t z;
+    fixed_t frac;
+
+    mobj_t* th;
+
+    fixed_t slope;
+    fixed_t dist;
+    fixed_t thingtopslope;
+    fixed_t thingbottomslope;
+
+    if (in->isaline)
+    {
+        const line_t *li = in->d.line;
+
+        if (LN_SPECIAL(li))
+            P_ShootSpecialLine (_g->shootthing, li);
+
+        if (li->flags & ML_TWOSIDED)
+        {  // crosses a two sided (really 2s) line
+            P_LineOpening (li);
+            dist = FixedMul(_g->attackrange, in->frac);
+
+            // killough 11/98: simplify
+
+            if ((LN_FRONTSECTOR(li)->floorheight==LN_BACKSECTOR(li)->floorheight ||
+                 (slope = FixedDiv(_g->openbottom - _g->shootz , dist)) <= _g->aimslope) &&
+                    (LN_FRONTSECTOR(li)->ceilingheight==LN_BACKSECTOR(li)->ceilingheight ||
+                     (slope = FixedDiv (_g->opentop - _g->shootz , dist)) >= _g->aimslope))
+                return true;      // shot continues
+        }
+
+        // hit line
+        // position a bit closer
+
+        frac = in->frac - FixedDiv (4*FRACUNIT,_g->attackrange);
+        x = _g->trace.x + FixedMul (_g->trace.dx, frac);
+        y = _g->trace.y + FixedMul (_g->trace.dy, frac);
+        z = _g->shootz + FixedMul (_g->aimslope, FixedMul(frac, _g->attackrange));
+
+        if (LN_FRONTSECTOR(li)->ceilingpic == _g->skyflatnum)
+        {
+            // don't shoot the sky!
+
+            if (z > LN_FRONTSECTOR(li)->ceilingheight)
+                return false;
+
+            // it's a sky hack wall
+
+            if  (LN_BACKSECTOR(li) && LN_BACKSECTOR(li)->ceilingpic == _g->skyflatnum)
+                if (LN_BACKSECTOR(li)->ceilingheight < z)
+                    return false;
+        }
+
+        // Spawn bullet puffs.
+
+        P_SpawnPuff (x,y,z);
+
+        // don't go any farther
+
+        return false;
+    }
+
+    // shoot a thing
+
+    th = in->d.thing;
+    if (th == _g->shootthing)
+        return true;  // can't shoot self
+
+    if (!(th->flags&MF_SHOOTABLE))
+        return true;  // corpse or something
+
+    // check angles to see if the thing can be aimed at
+
+    dist = FixedMul (_g->attackrange, in->frac);
+    thingtopslope = FixedDiv (th->z+th->height - _g->shootz , dist);
+
+    if (thingtopslope < _g->aimslope)
+        return true;  // shot over the thing
+
+    thingbottomslope = FixedDiv (th->z - _g->shootz, dist);
+
+    if (thingbottomslope > _g->aimslope)
+        return true;  // shot under the thing
+
+    // hit thing
+    // position a bit closer
+
+    frac = in->frac - FixedDiv (10*FRACUNIT,_g->attackrange);
+
+    x = _g->trace.x + FixedMul (_g->trace.dx, frac);
+    y = _g->trace.y + FixedMul (_g->trace.dy, frac);
+    z = _g->shootz + FixedMul (_g->aimslope, FixedMul(frac, _g->attackrange));
+
+    // Spawn bullet puffs or blod spots,
+    // depending on target type.
+    if (in->d.thing->flags & MF_NOBLOOD)
+        P_SpawnPuff (x,y,z);
+    else
+        P_SpawnBlood (x,y,z, _g->la_damage);
+
+    if (_g->la_damage)
+        P_DamageMobj (th, _g->shootthing, _g->shootthing, _g->la_damage);
+
+    // don't go any farther
+    return false;
+}
+
+
+//
+// P_AimLineAttack
+//
+fixed_t P_AimLineAttack(mobj_t* t1,angle_t angle,fixed_t distance)
+{
+    fixed_t x2;
+    fixed_t y2;
+
+    angle >>= ANGLETOFINESHIFT;
+    _g->shootthing = t1;
+
+    x2 = t1->x + (distance>>FRACBITS)*finecosine[angle];
+    y2 = t1->y + (distance>>FRACBITS)*finesine[angle];
+    _g->shootz = t1->z + (t1->height>>1) + 8*FRACUNIT;
+
+    // can't shoot outside view angles
+
+    _g->topslope = 100*FRACUNIT/160;
+    _g->bottomslope = -100*FRACUNIT/160;
+
+    _g->attackrange = distance;
+    _g->linetarget = NULL;
+
+    P_PathTraverse(t1->x,t1->y,x2,y2,PT_ADDLINES|PT_ADDTHINGS,PTR_AimTraverse);
+
+    if (_g->linetarget)
+        return _g->aimslope;
+
+    return 0;
+}
+
+
+//
+// P_LineAttack
+// If damage == 0, it is just a test trace
+// that will leave linetarget set.
+//
+
+void P_LineAttack
+(mobj_t* t1,
+ angle_t angle,
+ fixed_t distance,
+ fixed_t slope,
+ int     damage)
+{
+    fixed_t x2;
+    fixed_t y2;
+
+    angle >>= ANGLETOFINESHIFT;
+    _g->shootthing = t1;
+    _g->la_damage = damage;
+    x2 = t1->x + (distance>>FRACBITS)*finecosine[angle];
+    y2 = t1->y + (distance>>FRACBITS)*finesine[angle];
+    _g->shootz = t1->z + (t1->height>>1) + 8*FRACUNIT;
+    _g->attackrange = distance;
+    _g->aimslope = slope;
+
+    P_PathTraverse(t1->x,t1->y,x2,y2,PT_ADDLINES|PT_ADDTHINGS,PTR_ShootTraverse);
+}
+
+
+//
+// USE LINES
+//
+
+
+bool PTR_UseTraverse (intercept_t* in)
+{
+    int side;
+
+
+
+    if (!LN_SPECIAL(in->d.line))
+    {
+        P_LineOpening (in->d.line);
+        if (_g->openrange <= 0)
+        {
+            S_StartSound (_g->usething, sfx_noway);
+
+            // can't use through a wall
+            return false;
+        }
+
+        // not a special line, but keep checking
+
+        return true;
+    }
+
+    side = 0;
+    if (P_PointOnLineSide (_g->usething->x, _g->usething->y, in->d.line) == 1)
+        side = 1;
+
+    //  return false;   // don't use back side
+
+    P_UseSpecialLine (_g->usething, in->d.line, side);
+
+    //WAS can't use for than one special line in a row
+    //jff 3/21/98 NOW multiple use allowed with enabling line flag
+
+    return ((in->d.line->flags&ML_PASSUSE))?
+                true : false;
+}
+
+// Returns false if a "oof" sound should be made because of a blocking
+// linedef. Makes 2s middles which are impassable, as well as 2s uppers
+// and lowers which block the player, cause the sound effect when the
+// player tries to activate them. Specials are excluded, although it is
+// assumed that all special linedefs within reach have been considered
+// and rejected already (see P_UseLines).
+//
+// by Lee Killough
+//
+
+bool PTR_NoWayTraverse(intercept_t* in)
+{
+    const line_t *ld = in->d.line;
+    // This linedef
+    return LN_SPECIAL(ld) || !(                 // Ignore specials
+                                                ld->flags & ML_BLOCKING || (            // Always blocking
+                                                                                        P_LineOpening(ld),                      // Find openings
+                                                                                        _g->openrange <= 0 ||                       // No opening
+                                                                                        _g->openbottom > _g->usething->z+24*FRACUNIT || // Too high it blocks
+                                                                                        _g->opentop < _g->usething->z+_g->usething->height  // Too low it blocks
+                                                                                        )
+                                                );
+}
+
+//
+// P_UseLines
+// Looks for special lines in front of the player to activate.
+//
+void P_UseLines (player_t*  player)
+{
+    int     angle;
+    fixed_t x1;
+    fixed_t y1;
+    fixed_t x2;
+    fixed_t y2;
+
+    _g->usething = player->mo;
+
+    angle = player->mo->angle >> ANGLETOFINESHIFT;
+
+    x1 = player->mo->x;
+    y1 = player->mo->y;
+    x2 = x1 + (USERANGE>>FRACBITS)*finecosine[angle];
+    y2 = y1 + (USERANGE>>FRACBITS)*finesine[angle];
+
+    // old code:
+    //
+    // P_PathTraverse ( x1, y1, x2, y2, PT_ADDLINES, PTR_UseTraverse );
+    //
+    // This added test makes the "oof" sound work on 2s lines -- killough:
+
+    if (P_PathTraverse ( x1, y1, x2, y2, PT_ADDLINES, PTR_UseTraverse ))
+        if (!P_PathTraverse ( x1, y1, x2, y2, PT_ADDLINES, PTR_NoWayTraverse ))
+            S_StartSound (_g->usething, sfx_noway);
+}
+
+
+//
+// RADIUS ATTACK
+//
+
+
+
+
+//
+// PIT_RadiusAttack
+// "bombsource" is the creature
+// that caused the explosion at "bombspot".
+//
+
+bool PIT_RadiusAttack (mobj_t* thing)
+{
+    fixed_t dx;
+    fixed_t dy;
+    fixed_t dist;
+
+    /* killough 8/20/98: allow bouncers to take damage
+   * (missile bouncers are already excluded with MF_NOBLOCKMAP)
+   */
+
+    if (!(thing->flags & MF_SHOOTABLE))
+        return true;
+
+    // Boss spider and cyborg
+    // take no damage from concussion.
+
+    // killough 8/10/98: allow grenades to hurt anyone, unless
+    // fired by Cyberdemons, in which case it won't hurt Cybers.
+
+    if (thing->type == MT_CYBORG || thing->type == MT_SPIDER)
+        return true;
+
+    dx = D_abs(thing->x - _g->bombspot->x);
+    dy = D_abs(thing->y - _g->bombspot->y);
+
+    dist = dx>dy ? dx : dy;
+    dist = (dist - P_RADIUS(thing)) >> FRACBITS;
+
+    if (dist < 0)
+        dist = 0;
+
+    if (dist >= _g->bombdamage)
+        return true;  // out of range
+
+    if ( P_CheckSight (thing, _g->bombspot) )
+    {
+        // must be in direct path
+        P_DamageMobj (thing, _g->bombspot, _g->bombsource, _g->bombdamage - dist);
+    }
+
+    return true;
+}
+
+
+//
+// P_RadiusAttack
+// Source is the creature that caused the explosion at spot.
+//
+void P_RadiusAttack(mobj_t* spot,mobj_t* source,int damage)
+{
+    int x;
+    int y;
+
+    int xl;
+    int xh;
+    int yl;
+    int yh;
+
+    fixed_t dist;
+
+    dist = (damage+MAXRADIUS)<<FRACBITS;
+    yh = (spot->y + dist - _g->bmaporgy)>>MAPBLOCKSHIFT;
+    yl = (spot->y - dist - _g->bmaporgy)>>MAPBLOCKSHIFT;
+    xh = (spot->x + dist - _g->bmaporgx)>>MAPBLOCKSHIFT;
+    xl = (spot->x - dist - _g->bmaporgx)>>MAPBLOCKSHIFT;
+    _g->bombspot = spot;
+    _g->bombsource = source;
+    _g->bombdamage = damage;
+
+    for (y=yl ; y<=yh ; y++)
+        for (x=xl ; x<=xh ; x++)
+            P_BlockThingsIterator (x, y, PIT_RadiusAttack );
+}
+
+
+
+//
+// SECTOR HEIGHT CHANGING
+// After modifying a sectors floor or ceiling height,
+// call this routine to adjust the positions
+// of all things that touch the sector.
+//
+// If anything doesn't fit anymore, true will be returned.
+// If crunch is true, they will take damage
+//  as they are being crushed.
+// If Crunch is false, you should set the sector height back
+//  the way it was and call P_ChangeSector again
+//  to undo the changes.
+//
+
+
+
+//
+// PIT_ChangeSector
+//
+
+bool PIT_ChangeSector (mobj_t* thing)
+{
+    mobj_t* mo;
+
+    if (P_ThingHeightClip (thing))
+        return true; // keep checking
+
+    // crunch bodies to giblets
+
+    if (thing->health <= 0)
+    {
+        P_SetMobjState (thing, S_GIBS);
+        P_WakeMobj (thing); // in case a patch makes S_GIBS animate
+
+        thing->flags &= ~MF_SOLID;
+        thing->height = 0;
+        thing->radius = 0;
+        return true; // keep checking
+    }
+
+    // crunch dropped items
+
+    if (thing->flags & MF_DROPPED)
+    {
+        P_RemoveMobj (thing);
+
+        // keep checking
+        return true;
+    }
+
+    if (! (thing->flags & MF_SHOOTABLE) )
+    {
+        // assume it is bloody gibs or something
+        return true;
+    }
+
+    _g->nofit = true;
+
+    if (_g->crushchange && !(_g->leveltime&3)) {
+        int t;
+        P_DamageMobj(thing,NULL,NULL,10);
+
+        // spray blood in a random direction
+        mo = P_SpawnMobj (thing->x,
+                          thing->y,
+                          thing->z + thing->height/2, MT_BLOOD);
+
+        /* killough 8/10/98: remove dependence on order of evaluation */
+        t = P_Random();
+        mo->momx = (t - P_Random ())<<12;
+        t = P_Random();
+        mo->momy = (t - P_Random ())<<12;
+    }
+
+    // keep checking (crush other things)
+    return true;
+}
+
+//
+// P_CheckSector
+// Clip every thing in the blockmap blocks the sector covers
+// (vanilla P_ChangeSector). MAXRADIUS pads the box so things
+// centred just outside the sector are still checked.
+//
+
+bool P_CheckSector(sector_t* sector,bool crunch)
+{
+    fixed_t bbox[4];
+
+    P_SectorBBox(sector, bbox);
+
+    const int xl = (bbox[BOXLEFT]   - _g->bmaporgx - MAXRADIUS) >> MAPBLOCKSHIFT;
+    const int xh = (bbox[BOXRIGHT]  - _g->bmaporgx + MAXRADIUS) >> MAPBLOCKSHIFT;
+    const int yl = (bbox[BOXBOTTOM] - _g->bmaporgy - MAXRADIUS) >> MAPBLOCKSHIFT;
+    const int yh = (bbox[BOXTOP]    - _g->bmaporgy + MAXRADIUS) >> MAPBLOCKSHIFT;
+
+    _g->nofit = false;
+    _g->crushchange = crunch;
+
+    for (int x = xl; x <= xh; x++)
+        for (int y = yl; y <= yh; y++)
+            P_BlockThingsIterator(x, y, PIT_ChangeSector);
+
+    return _g->nofit;
+}
+
+/* cphipps 2004/08/30 - 
+ * Must clear tmthing at tic end, as it might contain a pointer to a removed thinker, or the level might have ended/been ended and we clear the objects it was pointing too. Hopefully we don't need to carry this between tics for sync. */
+void P_MapStart(void)
+{
+#ifdef RANGECHECK
+    if (_g->tmthing) I_Error("P_MapStart: tmthing set!");
+#endif
+}
+
+void P_MapEnd(void)
+{
+    _g->tmthing = NULL;
+}

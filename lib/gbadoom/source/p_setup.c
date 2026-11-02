@@ -1,0 +1,431 @@
+/* Emacs style mode select   -*- C++ -*-
+ *-----------------------------------------------------------------------------
+ *
+ *
+ *  PrBoom: a Doom port merged with LxDoom and LSDLDoom
+ *  based on BOOM, a modified and improved DOOM engine
+ *  Copyright (C) 1999 by
+ *  id Software, Chi Hoang, Lee Killough, Jim Flynn, Rand Phares, Ty Halderman
+ *  Copyright (C) 1999-2000 by
+ *  Jess Haas, Nicolas Kalkhof, Colin Phipps, Florian Schulze
+ *  Copyright 2005, 2006 by
+ *  Florian Schulze, Colin Phipps, Neil Stevens, Andrey Budko
+ *
+ *  This program is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU General Public License
+ *  as published by the Free Software Foundation; either version 2
+ *  of the License, or (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+ *  02111-1307, USA.
+ *
+ * DESCRIPTION:
+ *  Do all the WAD I/O, get map description,
+ *  set up initial state and misc. LUTs.
+ *
+ *-----------------------------------------------------------------------------*/
+
+
+#include "m_bbox.h"
+#include "w_wad.h"
+#include "r_main.h"
+#include "r_things.h"
+#include "p_map.h"
+#include "p_setup.h"
+#include "p_spec.h"
+#include "p_tick.h"
+#include "p_enemy.h"
+#include "s_sound.h"
+#include "lprintf.h" //jff 10/6/98 for debug outputs
+
+#include "global_data.h"
+
+//
+// P_LoadSegs
+//
+// killough 5/3/98: reformatted, cleaned up
+
+static void P_LoadSegs (int lump)
+{
+    int numsegs = W_LumpLength(lump) / sizeof(seg_t);
+    _g->segs = (const seg_t *)W_CacheLumpNum(lump);
+
+    if (!numsegs)
+        I_Error("P_LoadSegs: no segs in level");
+}
+
+//
+// P_LoadSubsectors
+//
+// killough 5/3/98: reformatted, cleaned up
+
+static void P_LoadSubsectors (int lump)
+{
+    _g->numsubsectors = W_LumpLength (lump) / sizeof(subsector_t);
+    _g->subsectors = W_CacheLumpNum(lump);
+
+    if ((!_g->subsectors) || (!_g->numsubsectors))
+        I_Error("P_LoadSubsectors: no subsectors in level");
+}
+
+//
+// P_LoadSectors
+//
+// killough 5/3/98: reformatted, cleaned up
+
+static void P_LoadSectors (int lump)
+{
+    const byte *data; // cph - const*
+    int  i;
+
+    _g->numsectors = W_LumpLength (lump) / sizeof(mapsector_t);
+    _g->sectors = Z_Calloc (_g->numsectors,sizeof(sector_t),PU_LEVEL,0);
+    _g->soundqueue = Z_Malloc (_g->numsectors * sizeof(*_g->soundqueue), PU_LEVEL, 0);
+    _g->noisesector = NULL;
+    data = W_CacheLumpNum (lump); // cph - wad lump handling updated
+
+    for (i=0; i<_g->numsectors; i++)
+    {
+        sector_t *ss = _g->sectors + i;
+        const mapsector_t *ms = (const mapsector_t *) data + i;
+
+        ss->floorheight = SHORT(ms->floorheight)<<FRACBITS;
+        ss->ceilingheight = SHORT(ms->ceilingheight)<<FRACBITS;
+        ss->floorpic = R_FlatNumForName(ms->floorpic);
+        ss->ceilingpic = R_FlatNumForName(ms->ceilingpic);
+
+        ss->lightlevel = SHORT(ms->lightlevel);
+        ss->special = SHORT(ms->special);
+        ss->oldsecret = P_IsSecret(ss);
+        ss->tag = SHORT(ms->tag);
+
+        ss->thinglist = NULL;
+    }
+}
+
+
+//
+// P_LoadNodes
+//
+// killough 5/3/98: reformatted, cleaned up
+
+static void P_LoadNodes (int lump)
+{
+    numnodes = W_LumpLength (lump) / sizeof(mapnode_t);
+    nodes = W_CacheLumpNum (lump); // cph - wad lump handling updated
+
+    if ((!nodes) || (!numnodes))
+    {
+        // allow trivial maps
+        if (_g->numsubsectors == 1)
+            lprintf("P_LoadNodes: trivial map (no nodes, one subsector)\n");
+        else
+            I_Error("P_LoadNodes: no nodes in level");
+    }
+}
+
+
+/*
+ * P_LoadThings
+ *
+ * killough 5/3/98: reformatted, cleaned up
+ * cph 2001/07/07 - don't write into the lump cache, especially non-idepotent
+ * changes like byte order reversals. Take a copy to edit.
+ */
+
+static void P_LoadThings (int lump)
+{
+    int  i, numthings = W_LumpLength (lump) / sizeof(mapthing_t);
+    const mapthing_t *data = W_CacheLumpNum (lump);
+
+    if ((!data) || (!numthings))
+        I_Error("P_LoadThings: no things in level");
+
+    _g->thingPool = Z_Calloc(numthings, sizeof(mobj_t), PU_LEVEL, NULL);
+    _g->thingPoolSize = numthings;
+
+    for(int i = 0; i < numthings; i++)
+    {
+        _g->thingPool[i].type = MT_NOTHING;
+    }
+
+    for (i=0; i<numthings; i++)
+    {
+        const mapthing_t* mt = &data[i];
+
+        if (!P_IsDoomnumAllowed(mt->type))
+            continue;
+
+        // Do spawn all other stuff.
+        P_SpawnMapThing(mt);
+    }
+}
+
+//
+// P_LoadLineDefs
+// Also counts secret lines for intermissions.
+//        ^^^
+// ??? killough ???
+// Does this mean secrets used to be linedef-based, rather than sector-based?
+//
+// killough 4/4/98: split into two functions, to allow sidedef overloading
+//
+// killough 5/3/98: reformatted, cleaned up
+
+static void P_LoadLineDefs (int lump)
+{
+    _g->numlines = W_LumpLength (lump) / sizeof(line_t);
+    _g->lines = W_CacheLumpNum (lump);
+
+    _g->linedata = Z_Calloc(_g->numlines,sizeof(linedata_t),PU_LEVEL,0);
+}
+
+//
+// P_LoadSideDefs
+//
+// The sidedefs stay in ROM (GbaWadUtil merges identical ones and checks
+// sector numbers). Side 0 of a line with a special can be changed by
+// switches and scrollers; GbaWadUtil numbers those first and they get a
+// RAM copy. Must be called after P_LoadLineDefs.
+
+static void P_LoadSideDefs (int lump)
+{
+    _g->numsides = W_LumpLength(lump) / sizeof(side_t);
+    _g->sides = W_CacheLumpNum(lump);
+
+    int nummutable = 0;
+
+    for (int i=0; i<_g->numlines; i++)
+    {
+        const line_t* li = &_g->lines[i];
+
+        if (li->const_special && li->sidenum[0] != NO_INDEX && li->sidenum[0] >= nummutable)
+            nummutable = li->sidenum[0] + 1;
+    }
+
+    _g->nummutablesides = nummutable;
+    _g->mutablesides = NULL;
+
+    if (nummutable)
+    {
+        _g->mutablesides = Z_Malloc(nummutable*sizeof(side_t), PU_LEVEL, 0);
+        memcpy(_g->mutablesides, _g->sides, nummutable*sizeof(side_t));
+    }
+
+    for (int i=0; i<_g->numsides; i++)
+    {
+        R_GetTexture(_g->sides[i].midtexture);
+        R_GetTexture(_g->sides[i].toptexture);
+        R_GetTexture(_g->sides[i].bottomtexture);
+    }
+}
+
+//
+// jff 10/6/98
+// New code added to speed up calculation of internal blockmap
+// Algorithm is order of nlines*(ncols+nrows) not nlines*ncols*nrows
+//
+
+#define blkshift 7               /* places to shift rel position for cell num */
+#define blkmask ((1<<blkshift)-1)/* mask for rel position within cell */
+#define blkmargin 0              /* size guardband around map used */
+// jff 10/8/98 use guardband>0
+// jff 10/12/98 0 ok with + 1 in rows,cols
+
+typedef struct linelist_t        // type used to list lines in each block
+{
+    long num;
+    struct linelist_t *next;
+} linelist_t;
+
+//
+// P_LoadBlockMap
+//
+// killough 3/1/98: substantially modified to work
+// towards removing blockmap limit (a wad limitation)
+//
+// killough 3/30/98: Rewritten to remove blockmap limit,
+// though current algorithm is brute-force and unoptimal.
+//
+
+static void P_LoadBlockMap (int lump)
+{
+    _g->blockmaplump = W_CacheLumpNum(lump);
+
+    _g->bmaporgx = (short)_g->blockmaplump[0]<<FRACBITS;
+    _g->bmaporgy = (short)_g->blockmaplump[1]<<FRACBITS;
+    _g->bmapwidth = _g->blockmaplump[2];
+    _g->bmapheight = _g->blockmaplump[3];
+
+
+    // clear out mobj chains - CPhipps - use calloc
+    _g->blocklinks = Z_Calloc (_g->bmapwidth*_g->bmapheight,sizeof(*_g->blocklinks),PU_LEVEL,0);
+
+    _g->blockmap = _g->blockmaplump+4;
+}
+
+//
+// P_LoadReject - load the reject table, padding it if it is too short
+// an underflow will be padded with zeroes, or a doom.exe z_zone header
+// 
+// this function incorporates e6y's RejectOverrunAddInt code:
+// e6y: REJECT overrun emulation code
+// It's emulated successfully if the size of overflow no more than 16 bytes.
+// No more desync on teeth-32.wad\teeth-32.lmp.
+// http://www.doomworld.com/vb/showthread.php?s=&threadid=35214
+
+static void P_LoadReject(int lumpnum)
+{
+    _g->rejectlump = lumpnum + ML_REJECT;
+
+    // GbaWadUtil empties a REJECT that is all zeros (it never rejects).
+    _g->rejectmatrix = W_LumpLength(_g->rejectlump) ? W_CacheLumpNum(_g->rejectlump) : NULL;
+}
+
+//
+// P_LoadSectorLines
+// The per-sector line lists, built by GbaWadUtil in the order P_GroupLines
+// used to make them: u32 start[numsectors+1], then u16 line numbers.
+// Sector i has lines[start[i] .. start[i+1]-1].
+//
+
+static void P_LoadSectorLines(int lump)
+{
+    const unsigned int* start = W_CacheLumpNum(lump);
+    const unsigned short* lines = (const unsigned short*)(start + _g->numsectors + 1);
+
+    for (int i=0; i<_g->numsectors; i++)
+    {
+        _g->sectors[i].lines = lines + start[i];
+        _g->sectors[i].linecount = start[i+1] - start[i];
+    }
+}
+
+
+void P_FreeLevelData()
+{
+    R_ResetPlanes();
+
+    Z_FreeTags(PU_LEVEL, PU_PURGELEVEL-1);
+
+    Z_Free(_g->braintargets);
+    _g->braintargets = NULL;
+    _g->numbraintargets_alloc = _g->numbraintargets = 0;
+}
+
+//
+// P_SetupLevel
+//
+// killough 5/3/98: reformatted, cleaned up
+
+void P_SetupLevel(int episode, int map)
+{
+    int   i;
+    char  lumpname[9];
+    int   lumpnum;
+
+    _g->totalkills =_g->totalitems = _g->totalsecret = 0;
+    _g->wminfo.partime = 180;
+
+    for (i=0; i<MAXPLAYERS; i++)
+        _g->player.killcount = _g->player.secretcount = _g->player.itemcount = 0;
+
+    // Initial height of PointOfView will be set by player think.
+    _g->player.viewz = 1;
+
+    // Make sure all sounds are stopped before Z_FreeTags.
+    S_Start();
+
+    P_FreeLevelData();
+
+    //Load the sky texture.
+    R_GetTexture(_g->skytexture);
+
+    if (_g->rejectlump != -1)
+    { // cph - unlock the reject table
+        _g->rejectlump = -1;
+    }
+
+    P_InitThinkers();
+
+    // if working with a devlopment map, reload it
+    //    W_Reload ();     killough 1/31/98: W_Reload obsolete
+
+    // find map name
+    if (_g->gamemode == commercial)
+    {
+        lsnprintf(lumpname, sizeof(lumpname), "MAP%.2d", map);          // killough 1/24/98: simplify
+    }
+    else
+    {
+        lsnprintf(lumpname, sizeof(lumpname), "E%dM%d", episode, map);  // killough 1/24/98: simplify
+    }
+
+    lumpnum = W_GetNumForName(lumpname);
+
+    _g->leveltime = 0;
+
+    P_LoadSectors   (lumpnum+ML_SECTORS);
+    P_LoadLineDefs  (lumpnum+ML_LINEDEFS);
+    P_LoadSideDefs  (lumpnum+ML_SIDEDEFS);
+    P_LoadBlockMap  (lumpnum+ML_BLOCKMAP);
+
+
+    P_LoadSubsectors(lumpnum + ML_SSECTORS);
+    P_LoadNodes(lumpnum + ML_NODES);
+    P_LoadSegs(lumpnum + ML_SEGS);
+
+    P_LoadSectorLines(lumpnum + ML_SECLINES);
+
+    P_LoadReject(lumpnum);
+
+    // Note: you don't need to clear player queue slots --
+    // a much simpler fix is in g_game.c -- killough 10/98
+
+    /* cph - reset all multiplayer starts */
+    memset(_g->playerstarts,0,sizeof(_g->playerstarts));
+
+    for (i = 0; i < MAXPLAYERS; i++)
+        _g->player.mo = NULL;
+
+    P_MapStart();
+
+    P_LoadThings(lumpnum+ML_THINGS);
+
+    {
+        if (_g->playeringame && !_g->player.mo)
+            I_Error("P_SetupLevel: missing player %d start\n", i+1);
+    }
+
+    // killough 3/26/98: Spawn icon landings:
+    if (_g->gamemode==commercial)
+        P_SpawnBrainTargets();
+
+    // set up world state
+    P_SpawnSpecials();
+
+    P_MapEnd();
+
+}
+
+//
+// P_Init
+//
+void P_Init (void)
+{
+    lprintf("P_InitSwitchList");
+    P_InitSwitchList();
+
+    lprintf("P_InitPicAnims");
+    P_InitPicAnims();
+
+    lprintf("R_InitSprites");
+    R_InitSprites(sprnames);
+}

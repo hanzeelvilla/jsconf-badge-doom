@@ -1,0 +1,367 @@
+#include <stdarg.h>
+#include <stdio.h>
+#include <cstring>
+
+#ifdef GBA
+
+// ********************************************************************
+// GBA save type
+// ********************************************************************
+// This is needed for emulators to know which save type the ROM is using.
+
+static volatile const char save_type[10] = "SRAM_V110";
+
+extern "C"
+{
+    #include "doomdef.h"
+    #include "doomtype.h"
+    #include "d_main.h"
+    #include "d_event.h"
+
+    #include "global_data.h"
+
+    #include "tables.h"
+
+    #include "doom_iwad.h"
+}
+
+#include "i_system_e32.h"
+
+#include "lprintf.h"
+
+#include <gba.h>
+#include <gba_input.h>
+#include <gba_timers.h>
+
+#define DCNT_PAGE 0x0010
+
+#define VID_PAGE1 VRAM
+#define VID_PAGE2 0x600A000
+
+#define TM_FREQ_1024 0x0003
+#define TM_ENABLE 0x0080
+#define TM_CASCADE 0x0004
+#define TM_FREQ_1024 0x0003
+#define TM_FREQ_256 0x0002
+
+#define REG_WAITCNT	*((vu16 *)(0x4000204))
+
+
+//**************************************************************************************
+
+
+void I_InitScreen_e32()
+{
+    //The VBlank interrupt is the sound mixer's (i_audio.c).
+    irqInit();
+
+    //Set gamepak wait states and prefetch.
+    REG_WAITCNT = 0x46DA;
+
+    consoleDemoInit();
+
+    REG_TM2CNT_L= 65535-1872;     // 1872 ticks = 1/35 secs
+    REG_TM2CNT_H = TM_FREQ_256 | TM_ENABLE;       // we're using the 256 cycle timer
+
+    // cascade into tm3
+    REG_TM3CNT_H = TM_CASCADE | TM_ENABLE;
+
+    //Set pallete for text mode.
+    unsigned short* pal_ram = (unsigned short*)0x5000000;
+    pal_ram[0] = RGB5(0,0,0);
+    pal_ram[241] = RGB5(31,0,0);
+}
+
+//**************************************************************************************
+
+void I_BlitScreenBmp_e32()
+{
+
+}
+
+//**************************************************************************************
+
+void I_StartWServEvents_e32()
+{
+
+}
+
+//**************************************************************************************
+
+void I_PollWServEvents_e32()
+{
+    scanKeys();
+
+    u16 key_down = keysDown();
+
+    event_t ev;
+
+    if(key_down)
+    {
+        ev.type = ev_keydown;
+
+        if(key_down & KEY_UP)
+        {
+            ev.data1 = KEYD_UP;
+            D_PostEvent(&ev);
+        }
+        else if(key_down & KEY_DOWN)
+        {
+            ev.data1 = KEYD_DOWN;
+            D_PostEvent(&ev);
+        }
+
+        if(key_down & KEY_LEFT)
+        {
+            ev.data1 = KEYD_LEFT;
+            D_PostEvent(&ev);
+        }
+        else if(key_down & KEY_RIGHT)
+        {
+            ev.data1 = KEYD_RIGHT;
+            D_PostEvent(&ev);
+        }
+
+        if(key_down & KEY_SELECT)
+        {
+            ev.data1 = KEYD_SELECT;
+            D_PostEvent(&ev);
+        }
+
+        if(key_down & KEY_START)
+        {
+            ev.data1 = KEYD_START;
+            D_PostEvent(&ev);
+        }
+
+        if(key_down & KEY_A)
+        {
+            ev.data1 = KEYD_A;
+            D_PostEvent(&ev);
+        }
+
+        if(key_down & KEY_B)
+        {
+            ev.data1 = KEYD_B;
+            D_PostEvent(&ev);
+        }
+
+        if(key_down & KEY_L)
+        {
+            ev.data1 = KEYD_L;
+            D_PostEvent(&ev);
+        }
+
+        if(key_down & KEY_R)
+        {
+            ev.data1 = KEYD_R;
+            D_PostEvent(&ev);
+        }
+    }
+
+    u16 key_up = keysUp();
+
+    if(key_up)
+    {
+        ev.type = ev_keyup;
+
+        if(key_up & KEY_UP)
+        {
+            ev.data1 = KEYD_UP;
+            D_PostEvent(&ev);
+        }
+        else if(key_up & KEY_DOWN)
+        {
+            ev.data1 = KEYD_DOWN;
+            D_PostEvent(&ev);
+        }
+
+        if(key_up & KEY_LEFT)
+        {
+            ev.data1 = KEYD_LEFT;
+            D_PostEvent(&ev);
+        }
+        else if(key_up & KEY_RIGHT)
+        {
+            ev.data1 = KEYD_RIGHT;
+            D_PostEvent(&ev);
+        }
+
+        if(key_up & KEY_SELECT)
+        {
+            ev.data1 = KEYD_SELECT;
+            D_PostEvent(&ev);
+        }
+
+        if(key_up & KEY_START)
+        {
+            ev.data1 = KEYD_START;
+            D_PostEvent(&ev);
+        }
+
+        if(key_up & KEY_A)
+        {
+            ev.data1 = KEYD_A;
+            D_PostEvent(&ev);
+        }
+
+        if(key_up & KEY_B)
+        {
+            ev.data1 = KEYD_B;
+            D_PostEvent(&ev);
+        }
+
+        if(key_up & KEY_L)
+        {
+            ev.data1 = KEYD_L;
+            D_PostEvent(&ev);
+        }
+
+        if(key_up & KEY_R)
+        {
+            ev.data1 = KEYD_R;
+            D_PostEvent(&ev);
+        }
+    }
+}
+
+//**************************************************************************************
+
+void I_ClearWindow_e32()
+{
+
+}
+
+//**************************************************************************************
+
+unsigned short* I_GetBackBuffer()
+{
+    if(REG_DISPCNT & DCNT_PAGE)
+        return (unsigned short*)VID_PAGE1;
+
+    return (unsigned short*)VID_PAGE2;
+}
+
+//**************************************************************************************
+
+unsigned short* I_GetFrontBuffer()
+{
+    if(REG_DISPCNT & DCNT_PAGE)
+        return (unsigned short*)VID_PAGE2;
+
+    return (unsigned short*)VID_PAGE1;
+}
+
+//**************************************************************************************
+
+void I_CreateWindow_e32()
+{
+
+    //Bit5 = unlocked vram at h-blank.
+    SetMode(MODE_4 | BG2_ENABLE | BIT(5));
+
+    unsigned short* bb = I_GetBackBuffer();
+
+    memset(bb, 0, 240*160);
+
+    I_FinishUpdate_e32(NULL, NULL, 0, 0);
+
+    bb = I_GetBackBuffer();
+
+    memset(bb, 0, 240*160);
+
+    I_FinishUpdate_e32(NULL, NULL, 0, 0);
+
+}
+
+//**************************************************************************************
+
+void I_CreateBackBuffer_e32()
+{
+    I_CreateWindow_e32();
+}
+
+//**************************************************************************************
+
+void I_FinishUpdate_e32(const byte* srcBuffer, const unsigned short* pallete, const unsigned int width, const unsigned int height)
+{
+    REG_DISPCNT ^= DCNT_PAGE;
+}
+
+//**************************************************************************************
+
+//GbaWadUtil already converted GBAPAL to RGB15, and 4 byte aligns every
+//lump, so the palette is a straight 32 bit DMA copy.
+void I_SetPallete_e32(const unsigned short* pallete)
+{
+    DMA3COPY(pallete, (void*)0x5000000, DMA_DST_INC | DMA_SRC_INC | DMA32 | DMA_IMMEDIATE | (GBAPAL_COLOURS * 2 / 4))
+}
+
+//**************************************************************************************
+
+int I_GetVideoWidth_e32()
+{
+    return 120;
+}
+
+//**************************************************************************************
+
+int I_GetVideoHeight_e32()
+{
+    return 160;
+}
+
+
+
+//**************************************************************************************
+
+void I_ProcessKeyEvents()
+{
+    I_PollWServEvents_e32();
+}
+
+//**************************************************************************************
+
+//I_Error can be called deep in the stack, out of memory, or with _g or the
+//interrupt table trashed, so it uses none of them and very little stack.
+void I_Error (const char *error, ...)
+{
+    //No more interrupts: the VBlank mixer reads _g.
+    REG_IME = 0;
+
+    //Stop the sound DMA and silence the output.
+    REG_DMA1CNT = 0;
+    REG_TM0CNT_H = 0;
+    SNDSTAT = 0;
+
+    consoleDemoInit();
+
+    va_list v;
+    va_start(v, error);
+
+    lvprintf(error, v);
+
+    va_end(v);
+
+    //Halt until each VBlank. Halt wakes on IE & IF even with IME off,
+    //so this never goes through the interrupt dispatcher.
+    REG_DISPSTAT |= LCDC_VBL;
+    REG_IE = IRQ_VBLANK;
+
+    while(true)
+    {
+        REG_IF = IRQ_VBLANK;
+        Halt();
+    }
+}
+
+//**************************************************************************************
+
+void I_Quit_e32()
+{
+
+}
+
+//**************************************************************************************
+
+#endif
