@@ -1,9 +1,20 @@
 .pio/
 .vscode/
 .claude/settings.local.json
-# GbaWadUtil.exe + DLLs de Qt (46 MB), copiado del repo de GBADoom.
+CLAUDE.local.md
+
+# Notas de trabajo personales (bitácora); no forman parte del repo.
+NOTES.md
+
+# Clon de GBADoom fijado a un commit, para obtener/compilar GbaWadUtil
+# (ver README, "Convertir el WAD"). Incluye ~46 MB de .exe y DLLs de Qt.
+tools/GBADoom/
+# Copia anterior de GbaWadUtil de esta máquina de desarrollo.
 tools/GbaWadUtil/
+
+# Datos de Doom y volcados de flash: nunca se versionan.
+# - los WAD son de id Software
+# - respaldo-*.bin es TU copia de la badge, puede tener datos personales
 *.wad
 *.WAD
 *.bin
-NOTES.md

@@ -23,8 +23,10 @@ static void logHeap(const char *where) {
 
 void setup() {
   Serial.begin(115200);
-  // Si nadie lee el puerto USB, descartar el texto en vez de bloquear
-  // (ver NOTES.md: "Pausas en la animación sin monitor serial").
+  // Con el USB nativo (HWCDC), si ningún programa lee el puerto el buffer de
+  // transmisión se llena y Serial.print() se bloquea hasta su timeout: el juego
+  // se congelaría un instante cada vez que el motor imprime algo. Con timeout 0
+  // el texto se descarta si nadie lo lee, y el juego no se detiene.
   Serial.setTxTimeoutMs(0);
   delay(1500);
   Serial.println("\n== jsconf-badge-doom ==");

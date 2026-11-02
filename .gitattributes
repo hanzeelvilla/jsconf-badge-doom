@@ -1,0 +1,8 @@
+# Fin de línea LF en todo el repo, también al clonar en Windows.
+# Evita avisos "LF will be replaced by CRLF" y diffs ruidosos entre sistemas.
+* text=auto eol=lf
+
+# Binarios: que git no los toque.
+*.png binary
+*.jpg binary
+*.gif binary
